@@ -5,6 +5,7 @@ import en from "./locales/en.json";
 import ja from "./locales/ja.json";
 import zh from "./locales/zh.json";
 import zhTW from "./locales/zh-TW.json";
+import { applyProductBrand } from "../config/productBrand";
 
 type Language = "zh" | "zh-TW" | "en" | "ja";
 
@@ -61,7 +62,7 @@ const getInitialLanguage = (): Language => {
   return DEFAULT_LANGUAGE;
 };
 
-const resources = {
+const resources = applyProductBrand({
   en: {
     translation: en,
   },
@@ -74,7 +75,7 @@ const resources = {
   "zh-TW": {
     translation: zhTW,
   },
-};
+});
 
 i18n.use(initReactI18next).init({
   resources,

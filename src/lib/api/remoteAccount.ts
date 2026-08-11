@@ -79,7 +79,7 @@ export async function createRemoteSocketTicket(
       body: JSON.stringify({
         role: "desktop",
         device_id: getDesktopDeviceId(),
-        device_name: "CC Switch Desktop",
+        device_name: "ClawKit Desktop",
       }),
     },
   );

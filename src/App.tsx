@@ -53,6 +53,7 @@ import { extractErrorMessage } from "@/utils/errorUtils";
 import { isTextEditableTarget } from "@/utils/domUtils";
 import { deepClone } from "@/utils/deepClone";
 import { cn } from "@/lib/utils";
+import { PRODUCT_NAME } from "@/config/productBrand";
 import {
   isWindows,
   isLinux,
@@ -1239,7 +1240,7 @@ function App() {
               <div className="flex items-center gap-2">
                 <div className="relative inline-flex items-center">
                   <a
-                    href="https://ccswitch.io"
+                    href="https://clawkit.chat"
                     target="_blank"
                     rel="noreferrer"
                     className={cn(
@@ -1249,7 +1250,7 @@ function App() {
                         : "text-blue-500 hover:text-blue-600 dark:text-blue-400 dark:hover:text-blue-300",
                     )}
                   >
-                    CC Switch
+                    {PRODUCT_NAME}
                   </a>
                 </div>
                 <Button

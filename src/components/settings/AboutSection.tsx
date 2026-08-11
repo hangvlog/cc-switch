@@ -36,6 +36,7 @@ import { Badge } from "@/components/ui/badge";
 import { motion } from "framer-motion";
 import appIcon from "@/assets/icons/app-icon.png";
 import { APP_ICON_MAP } from "@/config/appConfig";
+import { PRODUCT_NAME } from "@/config/productBrand";
 import type { AppId } from "@/lib/api/types";
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { isWindows } from "@/lib/platform";
@@ -836,9 +837,9 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
           <div className="flex items-center gap-8">
             <div className="flex flex-col items-center gap-2">
               <div className="flex items-center gap-2">
-                <img src={appIcon} alt="CC Switch" className="h-5 w-5" />
+                <img src={appIcon} alt={PRODUCT_NAME} className="h-5 w-5" />
                 <h4 className="text-lg font-semibold text-foreground">
-                  CC Switch
+                  {PRODUCT_NAME}
                 </h4>
               </div>
               <div className="flex items-center gap-2">
