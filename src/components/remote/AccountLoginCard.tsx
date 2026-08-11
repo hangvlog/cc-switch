@@ -1,0 +1,82 @@
+import { useState } from "react";
+import { LogIn, Settings2 } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+
+export function AccountLoginCard({
+  apiBase,
+  busy,
+  showAdvanced,
+  onApiBaseChange,
+  onToggleAdvanced,
+  onLogin,
+}: {
+  apiBase: string;
+  busy: boolean;
+  showAdvanced: boolean;
+  onApiBaseChange: (value: string) => void;
+  onToggleAdvanced: () => void;
+  onLogin: (username: string, password: string) => Promise<void>;
+}) {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">登录 ClawKit 账号</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          手机与桌面登录同一账号后会自动发现并连接，无需配对码。
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Input
+          aria-label="账号"
+          value={username}
+          onChange={(event) => setUsername(event.target.value)}
+          placeholder="用户名 / 手机号 / 邮箱"
+          autoComplete="username"
+        />
+        <Input
+          aria-label="密码"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          placeholder="密码"
+          type="password"
+          autoComplete="current-password"
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && username && password && !busy) {
+              void onLogin(username, password);
+            }
+          }}
+        />
+        <Button
+          className="w-full"
+          disabled={!username.trim() || !password || busy}
+          onClick={() => void onLogin(username.trim(), password)}
+        >
+          <LogIn className="mr-2 h-4 w-4" />
+          {busy ? "正在登录" : "登录并自动连接"}
+        </Button>
+        <Button variant="ghost" size="sm" onClick={onToggleAdvanced}>
+          <Settings2 className="mr-1.5 h-4 w-4" />
+          高级设置
+        </Button>
+        {showAdvanced ? (
+          <div className="space-y-2 rounded-md bg-muted/40 p-3">
+            <label className="text-xs font-medium text-muted-foreground">
+              服务地址
+            </label>
+            <Input
+              value={apiBase}
+              onChange={(event) => onApiBaseChange(event.target.value)}
+              placeholder="由应用自动配置"
+              spellCheck={false}
+            />
+          </div>
+        ) : null}
+      </CardContent>
+    </Card>
+  );
+}

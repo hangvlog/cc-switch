@@ -5,6 +5,7 @@ import { codeInspectorPlugin } from "code-inspector-plugin";
 
 export default defineConfig(({ command }) => ({
   root: "src",
+  envDir: path.resolve(__dirname),
   plugins: [
     command === "serve" &&
       codeInspectorPlugin({
@@ -29,4 +30,3 @@ export default defineConfig(({ command }) => ({
   clearScreen: false,
   envPrefix: ["VITE_", "TAURI_"],
 }));
-

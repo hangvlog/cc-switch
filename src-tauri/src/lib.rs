@@ -1088,6 +1088,7 @@ pub fn run() {
             );
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
+            app.manage(commands::CodexRemoteState::default());
 
             // 初始化 SkillService
             let skill_service = SkillService::new();
@@ -1317,6 +1318,11 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::get_providers,
+            commands::get_codex_remote_status,
+            commands::start_codex_remote_server,
+            commands::send_codex_remote_message,
+            commands::stop_codex_remote_server,
+            commands::get_codex_plus_plus_status,
             commands::get_current_provider,
             commands::add_provider,
             commands::update_provider,
