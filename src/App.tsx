@@ -27,6 +27,7 @@ import {
   LayoutDashboard,
   Loader2,
   RefreshCw,
+  Smartphone,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Provider, VisibleApps } from "@/types";
@@ -107,6 +108,7 @@ import ToolsPanel from "@/components/openclaw/ToolsPanel";
 import AgentsDefaultsPanel from "@/components/openclaw/AgentsDefaultsPanel";
 import OpenClawHealthBanner from "@/components/openclaw/OpenClawHealthBanner";
 import HermesMemoryPanel from "@/components/hermes/HermesMemoryPanel";
+import { RemoteControlPage } from "@/components/remote/RemoteControlPage";
 import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
@@ -123,6 +125,7 @@ type View =
   | "agents"
   | "universal"
   | "sessions"
+  | "remote"
   | "workspace"
   | "openclawEnv"
   | "openclawTools"
@@ -158,6 +161,7 @@ const VALID_VIEWS: View[] = [
   "agents",
   "universal",
   "sessions",
+  "remote",
   "workspace",
   "openclawEnv",
   "openclawTools",
@@ -241,6 +245,12 @@ function App() {
       sharedFeatureApp !== "hermes" &&
       sharedFeatureApp !== "pi"
     ) {
+      setCurrentView("providers");
+    }
+  }, [sharedFeatureApp, currentView]);
+
+  useEffect(() => {
+    if (currentView === "remote" && sharedFeatureApp !== "codex") {
       setCurrentView("providers");
     }
   }, [sharedFeatureApp, currentView]);
@@ -1079,6 +1089,8 @@ function App() {
               appId={sharedFeatureApp}
             />
           );
+        case "remote":
+          return null;
         case "workspace":
           return <WorkspaceFilesPanel />;
         case "openclawEnv":
@@ -1312,6 +1324,7 @@ function App() {
                       defaultValue: "统一供应商",
                     })}
                   {currentView === "sessions" && t("sessionManager.title")}
+                  {currentView === "remote" && "手机远程控制"}
                   {currentView === "workspace" && t("workspace.title")}
                   {currentView === "openclawEnv" && t("openclaw.env.title")}
                   {currentView === "openclawTools" && t("openclaw.tools.title")}
@@ -1721,6 +1734,17 @@ function App() {
                                   <McpIcon size={16} />
                                 </Button>
                               )}
+                              {activeApp === "codex" && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setCurrentView("remote")}
+                                  className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
+                                  title="手机远程控制"
+                                >
+                                  <Smartphone className="h-4 w-4" />
+                                </Button>
+                              )}
                             </>
                           )}
                         </motion.div>
@@ -1748,7 +1772,10 @@ function App() {
         {isOpenClawView && openclawHealthWarnings.length > 0 && (
           <OpenClawHealthBanner warnings={openclawHealthWarnings} />
         )}
-        {renderContent()}
+        <div className={currentView === "remote" ? "contents" : "hidden"}>
+          <RemoteControlPage />
+        </div>
+        {currentView !== "remote" ? renderContent() : null}
       </main>
 
       <AddProviderDialog

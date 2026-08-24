@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { PRODUCT_NAME } from "@/config/productBrand";
 
 const BURST_LIFETIME_MS = 980;
 
@@ -85,7 +86,7 @@ export function RoutingActivationBrand({
       )}
 
       <motion.a
-        href="https://ccswitch.io"
+        href="https://clawkit.chat"
         target="_blank"
         rel="noreferrer"
         className={cn(
@@ -122,7 +123,7 @@ export function RoutingActivationBrand({
             : { duration: 0.28, ease: [0.22, 1, 0.36, 1] }
         }
       >
-        CC Switch
+        {PRODUCT_NAME}
       </motion.a>
 
       {showBurst && (

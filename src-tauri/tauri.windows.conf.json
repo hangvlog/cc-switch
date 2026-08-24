@@ -4,7 +4,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "CC Switch",
+        "title": "ClawKit Desktop",
         "titleBarStyle": "Visible",
         "visible": false,
         "minWidth": 900,
