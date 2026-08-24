@@ -280,21 +280,36 @@ pub async fn create_clawkit_socket_ticket() -> Result<Value, String> {
 
 #[tauri::command]
 pub fn get_codex_plus_plus_status() -> CodexPlusPlusStatus {
-    match find_codex_plus_plus_binary().and_then(|binary| {
-        Command::new(binary)
+    match find_codex_plus_plus_binary() {
+        Some(binary) => match Command::new(binary)
             .arg("status")
             .stdin(Stdio::null())
             .output()
-            .ok()
-    }) {
-        Some(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            CodexPlusPlusStatus {
-                installed: output.status.success() && !stdout.contains("Not installed"),
-                summary: if stdout.is_empty() { stderr } else { stdout },
+        {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                CodexPlusPlusStatus {
+                    // The integrated installer already ships this executable. A fresh
+                    // installation may legitimately report "Not installed" before the
+                    // first launch, but it is still available and must remain launchable.
+                    installed: true,
+                    summary: if stdout.is_empty() {
+                        if stderr.is_empty() {
+                            "ClawKit Codex 增强层已就绪".to_string()
+                        } else {
+                            stderr
+                        }
+                    } else {
+                        stdout
+                    },
+                }
             }
-        }
+            Err(error) => CodexPlusPlusStatus {
+                installed: true,
+                summary: format!("ClawKit Codex 增强层已就绪（状态读取失败：{error}）"),
+            },
+        },
         None => CodexPlusPlusStatus {
             installed: false,
             summary: "ClawKit Codex 增强层尚未安装".to_string(),
@@ -375,7 +390,7 @@ mod tests {
     fn gateway_secret_stays_out_of_codex_arguments() {
         assert_eq!(
             toml_override("model_providers.clawkit.env_key", "CLAWKIT_CODEX_API_KEY"),
-            r#"model_providers.clawkit.env_key=\"CLAWKIT_CODEX_API_KEY\""#
+            r#"model_providers.clawkit.env_key="CLAWKIT_CODEX_API_KEY""#
         );
     }
 }
