@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listen: vi.fn(), unlisten: vi.fn(), start: vi.fn(), send: vi.fn(),
-  stop: vi.fn(), plusPlus: vi.fn(), toastError: vi.fn(), toastSuccess: vi.fn(),
+  stop: vi.fn(), plusPlus: vi.fn(), launchPlusPlus: vi.fn(),
+  accountStatus: vi.fn(), accountLogin: vi.fn(), accountLogout: vi.fn(),
+  socketTicket: vi.fn(), toastError: vi.fn(), toastSuccess: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
@@ -11,6 +13,15 @@ vi.mock("@/lib/api/remote", () => ({
   remoteApi: {
     start: mocks.start, send: mocks.send, stop: mocks.stop,
     codexPlusPlusStatus: mocks.plusPlus,
+    launchCodexPlusPlus: mocks.launchPlusPlus,
+  },
+}));
+vi.mock("@/lib/api/remoteAccount", () => ({
+  remoteAccountApi: {
+    status: mocks.accountStatus,
+    login: mocks.accountLogin,
+    logout: mocks.accountLogout,
+    createSocketTicket: mocks.socketTicket,
   },
 }));
 vi.mock("sonner", () => ({
@@ -41,25 +52,8 @@ class FakeWebSocket {
   message(payload: unknown) { this.onmessage?.({ data: JSON.stringify(payload) }); }
 }
 
-function mockAccountRequests() {
-  vi.stubGlobal("fetch", vi.fn(async (input: string) => {
-    if (input.endsWith("/auth/login")) {
-      return {
-        ok: true, status: 200,
-        json: async () => ({
-          code: 200,
-          data: { token: "account-token", user: { id: 7, username: "hang" } },
-        }),
-      };
-    }
-    return {
-      ok: true, status: 200,
-      json: async () => ({ ticket: "one-time-ticket" }),
-    };
-  }));
-}
-
 async function login() {
+  await screen.findByText("登录 ClawKit 账号");
   fireEvent.change(screen.getByLabelText("账号"), { target: { value: "hang" } });
   fireEvent.change(screen.getByLabelText("密码"), { target: { value: "secret" } });
   fireEvent.click(screen.getByRole("button", { name: /登录并自动连接/ }));
@@ -68,17 +62,24 @@ async function login() {
 
 describe("RemoteControlPage", () => {
   beforeEach(() => {
-    localStorage.clear();
-    vi.stubEnv("VITE_CODEX_REMOTE_API_URL", "http://relay.test");
     vi.stubGlobal("WebSocket", FakeWebSocket);
-    vi.stubGlobal("crypto", { randomUUID: () => "desktop-device-uuid" });
-    mockAccountRequests();
     FakeWebSocket.instances = [];
     mocks.listen.mockResolvedValue(mocks.unlisten);
     mocks.start.mockResolvedValue({ running: true });
     mocks.stop.mockResolvedValue({ running: false });
     mocks.send.mockResolvedValue(undefined);
     mocks.plusPlus.mockResolvedValue({ installed: false, summary: "optional" });
+    mocks.launchPlusPlus.mockResolvedValue(undefined);
+    mocks.accountStatus.mockResolvedValue({ status: "ok", authenticated: false });
+    mocks.accountLogin.mockResolvedValue({
+      status: "ok", authenticated: true, user: { id: 7, username: "hang" },
+      deviceId: "desktop-device-uuid", expiresAt: 123456,
+    });
+    mocks.accountLogout.mockResolvedValue({ status: "ok", authenticated: false });
+    mocks.socketTicket.mockResolvedValue({
+      status: "ok", websocketUrl: "ws://relay.test/api/codex-remote/account/ws?ticket=one-time-ticket",
+      deviceId: "desktop-device-uuid",
+    });
   });
 
   it("logs in and automatically starts an account-scoped bridge", async () => {
@@ -86,13 +87,8 @@ describe("RemoteControlPage", () => {
     await login();
 
     expect(mocks.start).toHaveBeenCalledWith();
-    expect(fetch).toHaveBeenCalledWith(
-      "http://relay.test/api/codex-remote/account/socket-ticket",
-      expect.objectContaining({
-        method: "POST",
-        headers: expect.objectContaining({ Authorization: "Bearer account-token" }),
-      }),
-    );
+    expect(mocks.accountLogin).toHaveBeenCalledWith("hang", "secret");
+    expect(mocks.socketTicket).toHaveBeenCalledOnce();
     const socket = FakeWebSocket.instances[0];
     expect(socket.url).toBe(
       "ws://relay.test/api/codex-remote/account/ws?ticket=one-time-ticket",
@@ -111,10 +107,10 @@ describe("RemoteControlPage", () => {
   });
 
   it("restores the account and connects without another login", async () => {
-    localStorage.setItem(
-      "codex-remote-account-v1",
-      JSON.stringify({ token: "account-token", user: { id: 7, username: "hang" } }),
-    );
+    mocks.accountStatus.mockResolvedValue({
+      status: "ok", authenticated: true, user: { id: 7, username: "hang" },
+      deviceId: "desktop-device-uuid", expiresAt: 123456,
+    });
     render(<RemoteControlPage />);
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(screen.getByText(/已登录 hang/)).toBeInTheDocument();
@@ -134,7 +130,9 @@ describe("RemoteControlPage", () => {
 
   it("uses account login as the default instead of a pairing code", () => {
     render(<RemoteControlPage />);
-    expect(screen.getByText("登录 ClawKit 账号")).toBeInTheDocument();
-    expect(screen.queryByText("移动端配对码")).not.toBeInTheDocument();
+    return waitFor(() => {
+      expect(screen.getByText("登录 ClawKit 账号")).toBeInTheDocument();
+      expect(screen.queryByText("移动端配对码")).not.toBeInTheDocument();
+    });
   });
 });

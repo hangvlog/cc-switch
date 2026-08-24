@@ -4,6 +4,8 @@ mod auto_launch;
 mod claude_desktop_config;
 mod claude_mcp;
 mod claude_plugin;
+mod clawkit_account;
+mod clawkit_gateway;
 mod codex_config;
 mod codex_history_migration;
 mod codex_state_db;
@@ -1319,10 +1321,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_providers,
             commands::get_codex_remote_status,
+            commands::get_clawkit_account_status,
+            commands::login_clawkit_account,
+            commands::logout_clawkit_account,
+            commands::create_clawkit_socket_ticket,
             commands::start_codex_remote_server,
             commands::send_codex_remote_message,
             commands::stop_codex_remote_server,
             commands::get_codex_plus_plus_status,
+            commands::launch_codex_plus_plus,
             commands::get_current_provider,
             commands::add_provider,
             commands::update_provider,

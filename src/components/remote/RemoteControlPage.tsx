@@ -1,149 +1,110 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, Link2, LogOut, Power, RefreshCw, Settings2 } from "lucide-react";
+import { Check, Link2, LogOut, Play, Power, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { remoteApi, type CodexPlusPlusStatus } from "@/lib/api/remote";
 import {
-  accountWebsocketUrl,
-  clearRemoteAccount,
-  createRemoteSocketTicket,
-  loadRemoteAccount,
-  loginRemoteAccount,
-  saveRemoteAccount,
-  type RemoteAccountSession,
+  remoteAccountApi,
+  type RemoteAccountStatus,
 } from "@/lib/api/remoteAccount";
 import { AccountLoginCard } from "@/components/remote/AccountLoginCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 type BridgeState = "idle" | "starting" | "waiting" | "connected" | "error";
-const RELAY_URL_STORAGE_KEY = "codex-remote-relay-url-v1";
-
-function configuredApiBase() {
-  return (import.meta.env.VITE_CODEX_REMOTE_API_URL || "").replace(/\/$/, "");
-}
-
-function normalizeApiBase(value: string) {
-  return value.trim().replace(/\/+$/, "");
-}
-
-function isApiBaseValid(value: string) {
-  try {
-    const url = new URL(normalizeApiBase(value));
-    return ["http:", "https:"].includes(url.protocol) && Boolean(url.host);
-  } catch {
-    return false;
-  }
-}
 
 export function RemoteControlPage() {
-  const [apiBase, setApiBase] = useState(
-    () => localStorage.getItem(RELAY_URL_STORAGE_KEY) || configuredApiBase(),
-  );
-  const [showAdvanced, setShowAdvanced] = useState(() => !isApiBaseValid(apiBase));
-  const [account, setAccount] = useState<RemoteAccountSession | null>(loadRemoteAccount);
+  const [account, setAccount] = useState<RemoteAccountStatus | null>(null);
+  const [accountLoaded, setAccountLoaded] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [state, setState] = useState<BridgeState>("idle");
   const [peerOnline, setPeerOnline] = useState(false);
   const [plusPlus, setPlusPlus] = useState<CodexPlusPlusStatus | null>(null);
   const relaySocket = useRef<WebSocket | null>(null);
   const nativeUnlisten = useRef<UnlistenFn | null>(null);
-  const autoStartedToken = useRef<string | null>(null);
+  const autoStartedIdentity = useRef<string | null>(null);
 
   const closeSockets = useCallback(() => {
-    relaySocket.current?.close();
+    const socket = relaySocket.current;
     relaySocket.current = null;
+    socket?.close();
     nativeUnlisten.current?.();
     nativeUnlisten.current = null;
     setPeerOnline(false);
   }, []);
 
   useEffect(() => {
+    void remoteAccountApi
+      .status()
+      .then((status) => setAccount(status.authenticated ? status : null))
+      .finally(() => setAccountLoaded(true));
     void remoteApi.codexPlusPlusStatus().then(setPlusPlus).catch(() => null);
     return closeSockets;
   }, [closeSockets]);
 
-  const connectBridge = useCallback(
-    async (ticket: string) => {
-      const relay = new WebSocket(accountWebsocketUrl(apiBase, ticket));
-      relaySocket.current = relay;
-      nativeUnlisten.current = await listen<string>(
-        "codex-remote-message",
-        (event) => {
-          if (relay.readyState === WebSocket.OPEN) {
-            relay.send(JSON.stringify({ type: "relay.data", payload: event.payload }));
-          }
-        },
-      );
-      relay.onopen = () => setState("waiting");
-      relay.onmessage = (event) => {
-        try {
-          const message = JSON.parse(String(event.data));
-          if (message.type === "relay.data") {
-            void remoteApi.send(message.payload).catch(() => setState("error"));
-          } else if (message.type === "relay.peer" && message.role === "mobile") {
-            setPeerOnline(Boolean(message.online));
-            setState(message.online ? "connected" : "waiting");
-          }
-        } catch (error) {
-          console.warn("[RemoteBridge] invalid relay message", error);
+  const connectBridge = useCallback(async (websocketUrl: string) => {
+    const relay = new WebSocket(websocketUrl);
+    relaySocket.current = relay;
+    nativeUnlisten.current = await listen<string>(
+      "codex-remote-message",
+      (event) => {
+        if (relay.readyState === WebSocket.OPEN) {
+          relay.send(JSON.stringify({ type: "relay.data", payload: event.payload }));
         }
-      };
-      relay.onerror = () => setState("error");
-      relay.onclose = () => {
-        if (relaySocket.current === relay) setState("error");
-      };
-    },
-    [apiBase],
-  );
+      },
+    );
+    relay.onopen = () => setState("waiting");
+    relay.onmessage = (event) => {
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.type === "relay.data") {
+          void remoteApi.send(message.payload).catch(() => setState("error"));
+        } else if (message.type === "relay.peer" && message.role === "mobile") {
+          setPeerOnline(Boolean(message.online));
+          setState(message.online ? "connected" : "waiting");
+        }
+      } catch (error) {
+        console.warn("[RemoteBridge] invalid relay message", error);
+      }
+    };
+    relay.onerror = () => setState("error");
+    relay.onclose = () => {
+      if (relaySocket.current === relay) setState("error");
+    };
+  }, []);
 
   const start = useCallback(async () => {
-    if (!account) return;
-    const endpoint = normalizeApiBase(apiBase);
-    if (!isApiBaseValid(endpoint)) {
-      toast.error("服务地址无效");
-      return;
-    }
-    setApiBase(endpoint);
-    localStorage.setItem(RELAY_URL_STORAGE_KEY, endpoint);
+    if (!account?.authenticated) return;
     setState("starting");
     closeSockets();
     try {
       await remoteApi.start();
-      const ticket = await createRemoteSocketTicket(endpoint, account.token);
-      await connectBridge(ticket);
+      const ticket = await remoteAccountApi.createSocketTicket();
+      await connectBridge(ticket.websocketUrl);
     } catch (error) {
       setState("error");
-      if ((error as Error & { status?: number }).status === 401) {
-        clearRemoteAccount();
-        setAccount(null);
-      }
+      const status = await remoteAccountApi.status().catch(() => null);
+      if (status && !status.authenticated) setAccount(null);
       toast.error(extractErrorMessage(error) || "远程服务启动失败");
     }
-  }, [account, apiBase, closeSockets, connectBridge]);
+  }, [account, closeSockets, connectBridge]);
 
   useEffect(() => {
-    if (!account || autoStartedToken.current === account.token) return;
-    autoStartedToken.current = account.token;
+    if (!account?.authenticated) return;
+    const identity = `${account.deviceId || "desktop"}:${account.expiresAt || "session"}`;
+    if (autoStartedIdentity.current === identity) return;
+    autoStartedIdentity.current = identity;
     void start();
   }, [account, start]);
 
   const login = async (username: string, password: string) => {
-    const endpoint = normalizeApiBase(apiBase);
-    if (!isApiBaseValid(endpoint)) {
-      toast.error("服务地址无效");
-      return;
-    }
     setLoginBusy(true);
     try {
-      const session = await loginRemoteAccount(endpoint, username, password);
-      saveRemoteAccount(session);
-      localStorage.setItem(RELAY_URL_STORAGE_KEY, endpoint);
+      const session = await remoteAccountApi.login(username, password);
       setAccount(session);
-      toast.success("登录成功，正在自动连接手机");
+      toast.success("登录成功，模型与手机连接正在自动配置");
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
@@ -159,29 +120,36 @@ export function RemoteControlPage() {
 
   const logout = async () => {
     await stop();
-    clearRemoteAccount();
-    autoStartedToken.current = null;
+    await remoteAccountApi.logout();
+    autoStartedIdentity.current = null;
     setAccount(null);
   };
+
+  const launchCodex = async () => {
+    try {
+      await remoteApi.launchCodexPlusPlus();
+      toast.success("ClawKit Codex 已启动，当前账号会自动复用");
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || "启动 ClawKit Codex 失败");
+    }
+  };
+
+  if (!accountLoaded) {
+    return <div className="px-6 py-8 text-sm text-muted-foreground">正在读取 ClawKit 登录状态…</div>;
+  }
 
   if (!account) {
     return (
       <div className="mx-auto w-full max-w-3xl px-6 pb-8 pt-4">
-        <AccountLoginCard
-          apiBase={apiBase}
-          busy={loginBusy}
-          showAdvanced={showAdvanced}
-          onApiBaseChange={setApiBase}
-          onToggleAdvanced={() => setShowAdvanced((value) => !value)}
-          onLogin={login}
-        />
+        <AccountLoginCard busy={loginBusy} onLogin={login} />
       </div>
     );
   }
 
   const statusLabel = state === "connected" ? "手机已连接" : state === "waiting"
-    ? "等待同账号手机" : state === "starting" ? "正在启动" : state === "error"
-      ? "连接异常" : "已停止";
+    ? "等待同账号手机" : state === "starting" ? "正在配置模型"
+      : state === "error" ? "连接异常" : "已停止";
+  const displayName = account.user?.nickname || account.user?.username || "ClawKit 用户";
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-8 pt-4">
@@ -190,7 +158,7 @@ export function RemoteControlPage() {
           <div>
             <CardTitle className="text-base">手机远程控制</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              已登录 {account.user.nickname || account.user.username}；同账号手机会自动连接。
+              已登录 {displayName}；账号模型、网关和手机连接均由应用自动配置。
             </p>
           </div>
           <Badge variant={peerOnline ? "default" : "secondary"}>{statusLabel}</Badge>
@@ -199,35 +167,48 @@ export function RemoteControlPage() {
           <div className="flex items-center justify-between rounded-md border px-3 py-3">
             <div>
               <div className="text-sm font-medium">ClawKit 账号安全中继</div>
-              <div className="text-xs text-muted-foreground">无需配对码，令牌仅用于创建一次性连接票据</div>
+              <div className="text-xs text-muted-foreground">
+                无需填写 Base URL 或 API Key；凭据仅注入后台 Codex 进程。
+              </div>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => setShowAdvanced((value) => !value)}>
-              <Settings2 className="mr-1.5 h-4 w-4" />高级设置
-            </Button>
           </div>
-          {showAdvanced ? (
-            <Input value={apiBase} onChange={(event) => setApiBase(event.target.value)} disabled={state !== "idle" && state !== "error"} />
-          ) : null}
           <div className="flex justify-between gap-2">
-            <Button variant="ghost" onClick={() => void logout()}><LogOut className="mr-2 h-4 w-4" />退出账号</Button>
+            <Button variant="ghost" onClick={() => void logout()}>
+              <LogOut className="mr-2 h-4 w-4" />退出账号
+            </Button>
             <div className="flex gap-2">
               {state !== "idle" ? (
                 <>
-                  <Button variant="outline" onClick={() => void start()} disabled={state === "starting"}><RefreshCw className="mr-2 h-4 w-4" />重新连接</Button>
-                  <Button variant="destructive" onClick={() => void stop()}><Power className="mr-2 h-4 w-4" />停止</Button>
+                  <Button variant="outline" onClick={() => void start()} disabled={state === "starting"}>
+                    <RefreshCw className="mr-2 h-4 w-4" />重新连接
+                  </Button>
+                  <Button variant="destructive" onClick={() => void stop()}>
+                    <Power className="mr-2 h-4 w-4" />停止
+                  </Button>
                 </>
               ) : (
-                <Button onClick={() => void start()}><Link2 className="mr-2 h-4 w-4" />启动连接</Button>
+                <Button onClick={() => void start()}>
+                  <Link2 className="mr-2 h-4 w-4" />启动连接
+                </Button>
               )}
             </div>
           </div>
         </CardContent>
       </Card>
       <Card>
-        <CardHeader><CardTitle className="text-base">Codex++ 增强层</CardTitle></CardHeader>
-        <CardContent className="flex items-start gap-3 text-sm">
-          {plusPlus?.installed ? <Check className="mt-0.5 h-4 w-4 text-emerald-500" /> : <Power className="mt-0.5 h-4 w-4 text-muted-foreground" />}
-          <div>{plusPlus?.summary || "Codex++ 为可选增强；远程协议不依赖它。"}</div>
+        <CardHeader><CardTitle className="text-base">Codex 桌面增强</CardTitle></CardHeader>
+        <CardContent className="flex items-center justify-between gap-3 text-sm">
+          <div className="flex items-start gap-3">
+            {plusPlus?.installed
+              ? <Check className="mt-0.5 h-4 w-4 text-emerald-500" />
+              : <Power className="mt-0.5 h-4 w-4 text-muted-foreground" />}
+            <div>{plusPlus?.summary || "ClawKit Codex 增强层随安装包提供。"}</div>
+          </div>
+          {plusPlus?.installed ? (
+            <Button size="sm" onClick={() => void launchCodex()}>
+              <Play className="mr-1.5 h-4 w-4" />启动 Codex
+            </Button>
+          ) : null}
         </CardContent>
       </Card>
     </div>

@@ -2,6 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface CodexServerStatus {
   running: boolean;
+  model?: string;
+  models?: string[];
+  availableQuota?: number;
+  usedQuota?: number;
 }
 
 export interface CodexPlusPlusStatus {
@@ -20,4 +24,5 @@ export const remoteApi = {
   stop: () => invoke<CodexServerStatus>("stop_codex_remote_server"),
   codexPlusPlusStatus: () =>
     invoke<CodexPlusPlusStatus>("get_codex_plus_plus_status"),
+  launchCodexPlusPlus: () => invoke<void>("launch_codex_plus_plus"),
 };

@@ -1,22 +1,14 @@
 import { useState } from "react";
-import { LogIn, Settings2 } from "lucide-react";
+import { LogIn } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 export function AccountLoginCard({
-  apiBase,
   busy,
-  showAdvanced,
-  onApiBaseChange,
-  onToggleAdvanced,
   onLogin,
 }: {
-  apiBase: string;
   busy: boolean;
-  showAdvanced: boolean;
-  onApiBaseChange: (value: string) => void;
-  onToggleAdvanced: () => void;
   onLogin: (username: string, password: string) => Promise<void>;
 }) {
   const [username, setUsername] = useState("");
@@ -59,23 +51,6 @@ export function AccountLoginCard({
           <LogIn className="mr-2 h-4 w-4" />
           {busy ? "正在登录" : "登录并自动连接"}
         </Button>
-        <Button variant="ghost" size="sm" onClick={onToggleAdvanced}>
-          <Settings2 className="mr-1.5 h-4 w-4" />
-          高级设置
-        </Button>
-        {showAdvanced ? (
-          <div className="space-y-2 rounded-md bg-muted/40 p-3">
-            <label className="text-xs font-medium text-muted-foreground">
-              服务地址
-            </label>
-            <Input
-              value={apiBase}
-              onChange={(event) => onApiBaseChange(event.target.value)}
-              placeholder="由应用自动配置"
-              spellCheck={false}
-            />
-          </div>
-        ) : null}
       </CardContent>
     </Card>
   );

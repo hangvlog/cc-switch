@@ -1,4 +1,5 @@
 use serde::Serialize;
+use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
@@ -8,6 +9,10 @@ use tauri::{AppHandle, Emitter, State};
 struct ServerProcess {
     child: Child,
     stdin: ChildStdin,
+    model: String,
+    models: Vec<String>,
+    available_quota: i64,
+    used_quota: i64,
 }
 
 impl Drop for ServerProcess {
@@ -24,6 +29,14 @@ pub struct CodexRemoteState(Mutex<Option<ServerProcess>>);
 #[serde(rename_all = "camelCase")]
 pub struct CodexServerStatus {
     running: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    available_quota: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    used_quota: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -43,6 +56,13 @@ fn server_status(process: &mut Option<ServerProcess>) -> CodexServerStatus {
     }
     CodexServerStatus {
         running: process.is_some(),
+        model: process.as_ref().map(|server| server.model.clone()),
+        models: process
+            .as_ref()
+            .map(|server| server.models.clone())
+            .unwrap_or_default(),
+        available_quota: process.as_ref().map(|server| server.available_quota),
+        used_quota: process.as_ref().map(|server| server.used_quota),
     }
 }
 
@@ -71,25 +91,61 @@ pub fn get_codex_remote_status(
 }
 
 #[tauri::command]
-pub fn start_codex_remote_server(
+pub async fn start_codex_remote_server(
     codex_home_override: Option<String>,
     app: AppHandle,
     state: State<'_, CodexRemoteState>,
 ) -> Result<CodexServerStatus, String> {
-    let mut process = state.0.lock().map_err(|error| error.to_string())?;
-    let current = server_status(&mut process);
-    if current.running {
-        return Ok(current);
+    {
+        let mut process = state.0.lock().map_err(|error| error.to_string())?;
+        let current = server_status(&mut process);
+        if current.running {
+            return Ok(current);
+        }
     }
 
+    let gateway = crate::clawkit_gateway::bootstrap().await?;
+    let catalog_path = crate::clawkit_gateway::write_model_catalog(&gateway.models)?;
+    let default_model = crate::clawkit_gateway::preferred_default_model(&gateway.models)
+        .ok_or_else(|| "当前账号没有可用的 API 模型".to_string())?
+        .to_string();
     let codex_home = validate_codex_home(codex_home_override)?;
     let binary = std::env::var("CODEX_REMOTE_CODEX_BIN").unwrap_or_else(|_| "codex".into());
     let mut command = Command::new(binary);
     command
+        .arg("-c")
+        .arg(toml_override("model_provider", "clawkit"))
+        .arg("-c")
+        .arg(toml_override("model", &default_model))
+        .arg("-c")
+        .arg(toml_override(
+            "model_catalog_json",
+            catalog_path.to_string_lossy().as_ref(),
+        ))
+        .arg("-c")
+        .arg(toml_override("model_providers.clawkit.name", "ClawKit API"))
+        .arg("-c")
+        .arg(toml_override(
+            "model_providers.clawkit.base_url",
+            &gateway.base_url,
+        ))
+        .arg("-c")
+        .arg(toml_override(
+            "model_providers.clawkit.env_key",
+            "CLAWKIT_CODEX_API_KEY",
+        ))
+        .arg("-c")
+        .arg(toml_override(
+            "model_providers.clawkit.wire_api",
+            "responses",
+        ))
+        .arg("-c")
+        .arg("model_providers.clawkit.requires_openai_auth=false")
         .arg("app-server")
+        .env("CLAWKIT_CODEX_API_KEY", &gateway.api_key)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     if let Some(path) = codex_home {
         command.env("CODEX_HOME", path);
     }
@@ -105,6 +161,10 @@ pub fn start_codex_remote_server(
         .stdout
         .take()
         .ok_or_else(|| "Codex app-server stdout is unavailable".to_string())?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| "Codex app-server stderr is unavailable".to_string())?;
 
     std::thread::spawn(move || {
         for line in BufReader::new(stdout).lines() {
@@ -122,8 +182,47 @@ pub fn start_codex_remote_server(
         }
     });
 
-    *process = Some(ServerProcess { child, stdin });
+    std::thread::spawn(move || {
+        for line in BufReader::new(stderr).lines() {
+            match line {
+                Ok(payload) => log::warn!("Codex app-server: {payload}"),
+                Err(error) => {
+                    log::warn!("Unable to read Codex app-server error output: {error}");
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut process = state.0.lock().map_err(|error| error.to_string())?;
+    if server_status(&mut process).running {
+        let mut duplicate = ServerProcess {
+            child,
+            stdin,
+            model: default_model,
+            models: gateway.models,
+            available_quota: gateway.available_quota,
+            used_quota: gateway.used_quota,
+        };
+        let _ = duplicate.child.kill();
+        return Ok(server_status(&mut process));
+    }
+    *process = Some(ServerProcess {
+        child,
+        stdin,
+        model: default_model,
+        models: gateway.models,
+        available_quota: gateway.available_quota,
+        used_quota: gateway.used_quota,
+    });
     Ok(server_status(&mut process))
+}
+
+fn toml_override(key: &str, value: &str) -> String {
+    format!(
+        "{key}={}",
+        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
+    )
 }
 
 #[tauri::command]
@@ -156,14 +255,39 @@ pub fn stop_codex_remote_server(
 }
 
 #[tauri::command]
+pub fn get_clawkit_account_status() -> Value {
+    crate::clawkit_account::ClawkitAccountClient::default().status()
+}
+
+#[tauri::command]
+pub async fn login_clawkit_account(username: String, password: String) -> Result<Value, String> {
+    crate::clawkit_account::ClawkitAccountClient::default()
+        .login(&username, &password)
+        .await
+}
+
+#[tauri::command]
+pub fn logout_clawkit_account() -> Result<Value, String> {
+    crate::clawkit_account::ClawkitAccountClient::default().logout()
+}
+
+#[tauri::command]
+pub async fn create_clawkit_socket_ticket() -> Result<Value, String> {
+    crate::clawkit_account::ClawkitAccountClient::default()
+        .create_socket_ticket()
+        .await
+}
+
+#[tauri::command]
 pub fn get_codex_plus_plus_status() -> CodexPlusPlusStatus {
-    let binary = std::env::var("CODEX_PLUSPLUS_BIN").unwrap_or_else(|_| "codexplusplus".into());
-    match Command::new(binary)
-        .arg("status")
-        .stdin(Stdio::null())
-        .output()
-    {
-        Ok(output) => {
+    match find_codex_plus_plus_binary().and_then(|binary| {
+        Command::new(binary)
+            .arg("status")
+            .stdin(Stdio::null())
+            .output()
+            .ok()
+    }) {
+        Some(output) => {
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             CodexPlusPlusStatus {
@@ -171,19 +295,87 @@ pub fn get_codex_plus_plus_status() -> CodexPlusPlusStatus {
                 summary: if stdout.is_empty() { stderr } else { stdout },
             }
         }
-        Err(_) => CodexPlusPlusStatus {
+        None => CodexPlusPlusStatus {
             installed: false,
-            summary: "Codex++ CLI is not available on PATH".to_string(),
+            summary: "ClawKit Codex 增强层尚未安装".to_string(),
         },
     }
 }
 
+#[tauri::command]
+pub fn launch_codex_plus_plus() -> Result<(), String> {
+    let binary =
+        find_codex_plus_plus_binary().ok_or_else(|| "ClawKit Codex 增强层尚未安装".to_string())?;
+    Command::new(binary)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("无法启动 ClawKit Codex：{error}"))
+}
+
+fn find_codex_plus_plus_binary() -> Option<PathBuf> {
+    if let Ok(explicit) = std::env::var("CODEX_PLUSPLUS_BIN") {
+        let path = PathBuf::from(explicit);
+        if path.exists() {
+            return Some(path);
+        }
+    }
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(directory) = current.parent() {
+            #[cfg(target_os = "windows")]
+            {
+                let sibling = directory.join("codex-plus-plus.exe");
+                if sibling.exists() {
+                    return Some(sibling);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if let Some(applications) = directory
+                    .parent()
+                    .and_then(|contents| contents.parent())
+                    .and_then(|app| app.parent())
+                {
+                    let sibling = applications
+                        .join("ClawKit Codex.app")
+                        .join("Contents/MacOS/CodexPlusPlus");
+                    if sibling.exists() {
+                        return Some(sibling);
+                    }
+                }
+            }
+        }
+    }
+    ["codex-plus-plus", "codexplusplus"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|candidate| {
+            Command::new(candidate)
+                .arg("status")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .is_ok()
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::validate_codex_home;
+    use super::{toml_override, validate_codex_home};
 
     #[test]
     fn rejects_relative_test_config_roots() {
         assert!(validate_codex_home(Some("relative/path".into())).is_err());
+    }
+
+    #[test]
+    fn gateway_secret_stays_out_of_codex_arguments() {
+        assert_eq!(
+            toml_override("model_providers.clawkit.env_key", "CLAWKIT_CODEX_API_KEY"),
+            r#"model_providers.clawkit.env_key=\"CLAWKIT_CODEX_API_KEY\""#
+        );
     }
 }
