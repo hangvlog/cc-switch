@@ -348,6 +348,10 @@ fn find_codex_plus_plus_binary() -> Option<PathBuf> {
             }
             #[cfg(target_os = "macos")]
             {
+                let bundled = directory.join("codex-plus-plus");
+                if bundled.exists() {
+                    return Some(bundled);
+                }
                 if let Some(applications) = directory
                     .parent()
                     .and_then(|contents| contents.parent())
