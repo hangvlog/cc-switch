@@ -313,21 +313,21 @@ fn find_codex_plus_plus_binary() -> Option<PathBuf> {
         }
     }
     if let Ok(current) = std::env::current_exe() {
-        if let Some(directory) = current.parent() {
+        if let Some(_directory) = current.parent() {
             #[cfg(target_os = "windows")]
             {
-                let sibling = directory.join("codex-plus-plus.exe");
+                let sibling = _directory.join("codex-plus-plus.exe");
                 if sibling.exists() {
                     return Some(sibling);
                 }
             }
             #[cfg(target_os = "macos")]
             {
-                let bundled = directory.join("codex-plus-plus");
+                let bundled = _directory.join("codex-plus-plus");
                 if bundled.exists() {
                     return Some(bundled);
                 }
-                if let Some(applications) = directory
+                if let Some(applications) = _directory
                     .parent()
                     .and_then(|contents| contents.parent())
                     .and_then(|app| app.parent())
