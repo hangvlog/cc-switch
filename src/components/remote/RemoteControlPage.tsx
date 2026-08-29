@@ -34,7 +34,6 @@ export function RemoteControlPage() {
   const [plusPlus, setPlusPlus] = useState<CodexPlusPlusStatus | null>(null);
   const relaySocket = useRef<WebSocket | null>(null);
   const nativeUnlisten = useRef<UnlistenFn | null>(null);
-  const autoStartedIdentity = useRef<string | null>(null);
 
   const closeSockets = useCallback(() => {
     const socket = relaySocket.current;
@@ -94,41 +93,36 @@ export function RemoteControlPage() {
     };
   }, []);
 
-  const start = useCallback(async () => {
-    if (!account?.authenticated) return;
-    setState("starting");
-    closeSockets();
-    try {
-      const status = await remoteApi.start();
-      setConfigurationReady(status.running);
-    } catch (error) {
-      setConfigurationReady(false);
-      setState("error");
-      const status = await remoteAccountApi.status().catch(() => null);
-      if (status && !status.authenticated) setAccount(null);
-      toast.error(extractErrorMessage(error) || "Codex 配置失败");
-      return;
-    }
+  const start = useCallback(
+    async (targetAccount = account) => {
+      if (!targetAccount?.authenticated) return;
+      setState("starting");
+      closeSockets();
+      try {
+        const status = await remoteApi.start();
+        setConfigurationReady(status.running);
+      } catch (error) {
+        setConfigurationReady(false);
+        setState("error");
+        const status = await remoteAccountApi.status().catch(() => null);
+        if (status && !status.authenticated) setAccount(null);
+        toast.error(extractErrorMessage(error) || "Codex 配置失败");
+        return;
+      }
 
-    try {
-      const ticket = await remoteAccountApi.createSocketTicket();
-      await connectBridge(ticket.websocketUrl);
-    } catch (error) {
-      setState("error");
-      toast.warning(
-        extractErrorMessage(error) ||
-          "Codex 已配置完成，但手机远程连接暂不可用",
-      );
-    }
-  }, [account, closeSockets, connectBridge]);
-
-  useEffect(() => {
-    if (!account?.authenticated) return;
-    const identity = `${account.deviceId || "desktop"}:${account.expiresAt || "session"}`;
-    if (autoStartedIdentity.current === identity) return;
-    autoStartedIdentity.current = identity;
-    void start();
-  }, [account, start]);
+      try {
+        const ticket = await remoteAccountApi.createSocketTicket();
+        await connectBridge(ticket.websocketUrl);
+      } catch (error) {
+        setState("error");
+        toast.warning(
+          extractErrorMessage(error) ||
+            "Codex 已配置完成，但手机远程连接暂不可用",
+        );
+      }
+    },
+    [account, closeSockets, connectBridge],
+  );
 
   const login = async (username: string, password: string) => {
     setLoginBusy(true);
@@ -136,6 +130,7 @@ export function RemoteControlPage() {
       const session = await remoteAccountApi.login(username, password);
       setAccount(session);
       toast.success("登录成功，正在一键配置 Codex");
+      await start(session);
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
@@ -153,7 +148,6 @@ export function RemoteControlPage() {
   const logout = async () => {
     await stop();
     await remoteAccountApi.logout();
-    autoStartedIdentity.current = null;
     setAccount(null);
   };
 

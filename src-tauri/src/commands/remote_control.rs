@@ -280,35 +280,17 @@ pub async fn create_clawkit_socket_ticket() -> Result<Value, String> {
 
 #[tauri::command]
 pub fn get_codex_plus_plus_status() -> CodexPlusPlusStatus {
-    match find_codex_plus_plus_binary() {
-        Some(binary) => match Command::new(binary)
-            .arg("status")
-            .stdin(Stdio::null())
-            .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-                CodexPlusPlusStatus {
-                    // The integrated installer already ships this executable. A fresh
-                    // installation may legitimately report "Not installed" before the
-                    // first launch, but it is still available and must remain launchable.
-                    installed: true,
-                    summary: if stdout.is_empty() {
-                        if stderr.is_empty() {
-                            "ClawKit Codex 增强层已就绪".to_string()
-                        } else {
-                            stderr
-                        }
-                    } else {
-                        stdout
-                    },
-                }
-            }
-            Err(error) => CodexPlusPlusStatus {
-                installed: true,
-                summary: format!("ClawKit Codex 增强层已就绪（状态读取失败：{error}）"),
-            },
+    codex_plus_plus_status(find_codex_plus_plus_binary())
+}
+
+fn codex_plus_plus_status(binary: Option<PathBuf>) -> CodexPlusPlusStatus {
+    match binary {
+        // Presence checks must stay side-effect free. The launcher does not expose a
+        // `status` subcommand, so executing it here would launch Codex while merely
+        // opening ClawKit Desktop.
+        Some(_) => CodexPlusPlusStatus {
+            installed: true,
+            summary: "ClawKit Codex 增强层已就绪".to_string(),
         },
         None => CodexPlusPlusStatus {
             installed: false,
@@ -367,27 +349,61 @@ fn find_codex_plus_plus_binary() -> Option<PathBuf> {
             }
         }
     }
-    ["codex-plus-plus", "codexplusplus"]
-        .into_iter()
-        .map(PathBuf::from)
-        .find(|candidate| {
-            Command::new(candidate)
-                .arg("status")
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .is_ok()
-        })
+    find_codex_plus_plus_on_path(std::env::var_os("PATH"))
+}
+
+fn find_codex_plus_plus_on_path(path: Option<std::ffi::OsString>) -> Option<PathBuf> {
+    let path = path?;
+    let names: &[&str] = if cfg!(target_os = "windows") {
+        &["codex-plus-plus.exe", "codexplusplus.exe"]
+    } else {
+        &["codex-plus-plus", "codexplusplus"]
+    };
+    std::env::split_paths(&path)
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|candidate| candidate.is_file())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{toml_override, validate_codex_home};
+    use super::{
+        codex_plus_plus_status, find_codex_plus_plus_on_path, toml_override, validate_codex_home,
+    };
 
     #[test]
     fn rejects_relative_test_config_roots() {
         assert!(validate_codex_home(Some("relative/path".into())).is_err());
+    }
+
+    #[test]
+    fn finds_launcher_on_path_without_executing_it() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let binary_name = if cfg!(target_os = "windows") {
+            "codex-plus-plus.exe"
+        } else {
+            "codex-plus-plus"
+        };
+        let binary = temp.path().join(binary_name);
+        std::fs::write(&binary, b"must not be executed").expect("write fake launcher");
+
+        let found = find_codex_plus_plus_on_path(Some(temp.path().as_os_str().to_os_string()));
+
+        assert_eq!(found.as_deref(), Some(binary.as_path()));
+    }
+
+    #[test]
+    fn status_check_does_not_execute_the_launcher() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let marker = temp.path().join("launched");
+        let binary = temp.path().join("codex-plus-plus");
+        std::fs::write(&binary, format!("touch {}", marker.display()))
+            .expect("write fake launcher");
+
+        let status = codex_plus_plus_status(Some(binary));
+
+        assert!(status.installed);
+        assert_eq!(status.summary, "ClawKit Codex 增强层已就绪");
+        assert!(!marker.exists());
     }
 
     #[test]
