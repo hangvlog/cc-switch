@@ -17,7 +17,10 @@ export function applyProductBrand<T>(value: T): T {
 
   if (value && typeof value === "object") {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, applyProductBrand(item)]),
+      Object.entries(value).map(([key, item]) => [
+        key,
+        applyProductBrand(item),
+      ]),
     ) as T;
   }
 

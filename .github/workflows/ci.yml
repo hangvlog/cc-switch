@@ -212,18 +212,23 @@ jobs:
       - name: Run Windows-to-WSL2 filesystem contract
         shell: pwsh
         run: |
-          $env:TEMP = $env:CC_SWITCH_WSL_TEST_TEMP
-          $env:TMP = $env:CC_SWITCH_WSL_TEST_TEMP
           $testName = "config::tests::atomic_write_replaces_existing_wsl_unc_file"
-          $testList = cargo test --lib --manifest-path src-tauri/Cargo.toml -- --ignored --list
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          $testBinary = Get-ChildItem "src-tauri/target/debug/deps/cc_switch_lib-*.exe" |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+          if (-not $testBinary) {
+            throw "Compiled cc-switch test binary was not found"
           }
+          $testList = & $testBinary.FullName --ignored --list
           $expected = "${testName}: test"
           if ($testList -notcontains $expected) {
             throw "Expected ignored test was not discovered: $testName"
           }
-          cargo test --lib --manifest-path src-tauri/Cargo.toml $testName -- --ignored --exact --nocapture
+          # Only the test process needs a WSL-backed temp path. Running Cargo or
+          # link.exe with TEMP on UNC makes mt.exe fail while embedding manifests.
+          $env:TEMP = $env:CC_SWITCH_WSL_TEST_TEMP
+          $env:TMP = $env:CC_SWITCH_WSL_TEST_TEMP
+          & $testBinary.FullName $testName --ignored --exact --nocapture
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }

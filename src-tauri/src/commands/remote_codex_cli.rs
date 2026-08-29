@@ -115,7 +115,11 @@ mod tests {
     #[test]
     fn finds_global_codex_cli_candidates_without_executing_them() {
         let temp = tempfile::tempdir().expect("create temp dir");
-        let separator = if cfg!(target_os = "windows") { ";" } else { ":" };
+        let separator = if cfg!(target_os = "windows") {
+            ";"
+        } else {
+            ":"
+        };
         let second = tempfile::tempdir().expect("create second temp dir");
         let path = std::ffi::OsString::from(format!(
             "{}{}{}",
@@ -125,6 +129,8 @@ mod tests {
         ));
         let candidates = codex_cli_candidates_on_path(Some(path));
         assert!(candidates.iter().any(|item| item.starts_with(temp.path())));
-        assert!(candidates.iter().any(|item| item.starts_with(second.path())));
+        assert!(candidates
+            .iter()
+            .any(|item| item.starts_with(second.path())));
     }
 }

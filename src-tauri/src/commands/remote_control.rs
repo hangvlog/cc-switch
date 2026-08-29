@@ -359,9 +359,7 @@ fn find_codex_plus_plus_on_path(path: Option<std::ffi::OsString>) -> Option<Path
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        codex_plus_plus_status, find_codex_plus_plus_on_path, validate_codex_home,
-    };
+    use super::{codex_plus_plus_status, find_codex_plus_plus_on_path, validate_codex_home};
 
     #[test]
     fn rejects_relative_test_config_roots() {
@@ -398,5 +396,4 @@ mod tests {
         assert_eq!(status.summary, "ClawKit Codex 增强层已就绪");
         assert!(!marker.exists());
     }
-
 }
