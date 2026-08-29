@@ -41,7 +41,7 @@ export function CodexQuickSetupHero({
             </span>
             <span className="inline-flex items-center gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-              不修改官方 Codex 配置与图标
+              保留原配置与登录状态，不修改图标
             </span>
           </div>
         </div>

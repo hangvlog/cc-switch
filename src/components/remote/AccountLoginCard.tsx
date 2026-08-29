@@ -57,7 +57,7 @@ export function AccountLoginCard({
         </Button>
         <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
           <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-          零侵入：不会覆盖官方 Codex 配置，也不会修改桌面图标
+          仅定向更新配置；保留登录状态，不修改 Codex 图标
         </p>
       </CardContent>
     </Card>

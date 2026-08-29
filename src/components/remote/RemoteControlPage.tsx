@@ -28,8 +28,11 @@ export function RemoteControlPage() {
   const [account, setAccount] = useState<RemoteAccountStatus | null>(null);
   const [accountLoaded, setAccountLoaded] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
+  const [configurationBusy, setConfigurationBusy] = useState(false);
   const [state, setState] = useState<BridgeState>("idle");
   const [configurationReady, setConfigurationReady] = useState(false);
+  const [canRollback, setCanRollback] = useState(false);
+  const [remoteRunning, setRemoteRunning] = useState(false);
   const [peerOnline, setPeerOnline] = useState(false);
   const [plusPlus, setPlusPlus] = useState<CodexPlusPlusStatus | null>(null);
   const relaySocket = useRef<WebSocket | null>(null);
@@ -54,8 +57,15 @@ export function RemoteControlPage() {
       .then(setPlusPlus)
       .catch(() => null);
     void remoteApi
-      .status()
-      .then((status) => setConfigurationReady(status.running))
+      .configurationStatus()
+      .then((status) => {
+        setConfigurationReady(status.configured);
+        setCanRollback(status.canRollback);
+      })
+      .catch(() => null);
+    void remoteApi
+      .remoteStatus()
+      .then((status) => setRemoteRunning(status.running))
       .catch(() => null);
     return closeSockets;
   }, [closeSockets]);
@@ -93,36 +103,59 @@ export function RemoteControlPage() {
     };
   }, []);
 
-  const start = useCallback(
+  const configure = useCallback(
     async (targetAccount = account) => {
       if (!targetAccount?.authenticated) return;
-      setState("starting");
-      closeSockets();
+      setConfigurationBusy(true);
       try {
-        const status = await remoteApi.start();
-        setConfigurationReady(status.running);
+        const status = await remoteApi.configure();
+        setConfigurationReady(status.configured);
+        setCanRollback(status.canRollback);
+        toast.success("Codex 配置已完成，重启 Codex 后生效");
       } catch (error) {
         setConfigurationReady(false);
-        setState("error");
         const status = await remoteAccountApi.status().catch(() => null);
         if (status && !status.authenticated) setAccount(null);
         toast.error(extractErrorMessage(error) || "Codex 配置失败");
-        return;
-      }
-
-      try {
-        const ticket = await remoteAccountApi.createSocketTicket();
-        await connectBridge(ticket.websocketUrl);
-      } catch (error) {
-        setState("error");
-        toast.warning(
-          extractErrorMessage(error) ||
-            "Codex 已配置完成，但手机远程连接暂不可用",
-        );
+      } finally {
+        setConfigurationBusy(false);
       }
     },
-    [account, closeSockets, connectBridge],
+    [account],
   );
+
+  const rollbackConfiguration = async () => {
+    setConfigurationBusy(true);
+    try {
+      const status = await remoteApi.rollbackConfiguration();
+      setConfigurationReady(status.configured);
+      setCanRollback(status.canRollback);
+      toast.success("已恢复一键配置前的 Codex 配置");
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || "恢复 Codex 配置失败");
+    } finally {
+      setConfigurationBusy(false);
+    }
+  };
+
+  const startRemote = useCallback(async () => {
+    if (!account?.authenticated || !configurationReady) return;
+    setState("starting");
+    closeSockets();
+    try {
+      const status = await remoteApi.startRemote();
+      setRemoteRunning(status.running);
+      const ticket = await remoteAccountApi.createSocketTicket();
+      await connectBridge(ticket.websocketUrl);
+    } catch (error) {
+      setRemoteRunning(false);
+      setState("error");
+      toast.warning(
+        extractErrorMessage(error) ||
+          "手机远程连接暂不可用；一键配置和 Codex 桌面端使用不受影响",
+      );
+    }
+  }, [account, closeSockets, configurationReady, connectBridge]);
 
   const login = async (username: string, password: string) => {
     setLoginBusy(true);
@@ -130,7 +163,7 @@ export function RemoteControlPage() {
       const session = await remoteAccountApi.login(username, password);
       setAccount(session);
       toast.success("登录成功，正在一键配置 Codex");
-      await start(session);
+      await configure(session);
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
@@ -138,15 +171,15 @@ export function RemoteControlPage() {
     }
   };
 
-  const stop = async () => {
+  const stopRemote = async () => {
     closeSockets();
-    await remoteApi.stop();
-    setConfigurationReady(false);
+    await remoteApi.stopRemote();
+    setRemoteRunning(false);
     setState("idle");
   };
 
   const logout = async () => {
-    await stop();
+    await stopRemote();
     await remoteAccountApi.logout();
     setAccount(null);
   };
@@ -178,11 +211,9 @@ export function RemoteControlPage() {
 
   const statusLabel = configurationReady
     ? "配置完成"
-    : state === "starting"
+    : configurationBusy
       ? "正在配置"
-      : state === "error"
-        ? "配置失败"
-        : "尚未配置";
+      : "尚未配置";
   const displayName =
     account.user?.nickname || account.user?.username || "ClawKit 用户";
 
@@ -212,12 +243,10 @@ export function RemoteControlPage() {
             <div className="flex items-start gap-3">
               <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
               <div>
-                <div className="text-sm font-medium">
-                  ClawKit Codex 独立安全环境
-                </div>
+                <div className="text-sm font-medium">零侵入配置</div>
                 <div className="text-xs text-muted-foreground">
-                  无需填写 Base URL 或 API Key；凭据仅注入独立 Codex
-                  进程，不修改官方 Codex。
+                  仅定向更新 Codex 用户配置和模型目录；保留 auth.json、MCP、
+                  Skills，不修改 Codex 应用、名称、图标或快捷方式。
                 </div>
               </div>
             </div>
@@ -228,27 +257,30 @@ export function RemoteControlPage() {
               退出账号
             </Button>
             <div className="flex gap-2">
-              {state !== "idle" ? (
-                <>
-                  <Button
-                    variant="outline"
-                    onClick={() => void start()}
-                    disabled={state === "starting"}
-                  >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    重新配置
-                  </Button>
-                  <Button variant="outline" onClick={() => void stop()}>
-                    <Power className="mr-2 h-4 w-4" />
-                    停止连接
-                  </Button>
-                </>
-              ) : (
-                <Button onClick={() => void start()}>
-                  <Link2 className="mr-2 h-4 w-4" />
-                  立即一键配置
+              {canRollback ? (
+                <Button
+                  variant="outline"
+                  onClick={() => void rollbackConfiguration()}
+                  disabled={configurationBusy}
+                >
+                  恢复配置
                 </Button>
-              )}
+              ) : null}
+              <Button
+                onClick={() => void configure()}
+                disabled={configurationBusy}
+              >
+                {configurationReady ? (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                ) : (
+                  <Link2 className="mr-2 h-4 w-4" />
+                )}
+                {configurationBusy
+                  ? "正在配置"
+                  : configurationReady
+                    ? "重新配置"
+                    : "立即一键配置"}
+              </Button>
             </div>
           </div>
         </CardContent>
@@ -294,7 +326,8 @@ export function RemoteControlPage() {
           <div>
             <div className="font-medium">手机远程连接（可选）</div>
             <div className="mt-1 text-xs text-muted-foreground">
-              手机与桌面登录同一账号后可自动连接，不影响一键配置和本机使用。
+              仅启用此功能时才启动 Codex
+              app-server；不可用时不影响一键配置和本机使用。
             </div>
           </div>
           <Badge variant={peerOnline ? "default" : "secondary"}>
@@ -302,10 +335,25 @@ export function RemoteControlPage() {
               ? "手机已连接"
               : state === "error"
                 ? "手机连接异常"
-                : configurationReady
+                : remoteRunning
                   ? "等待同账号手机"
                   : "未启用"}
           </Badge>
+          {remoteRunning ? (
+            <Button variant="outline" onClick={() => void stopRemote()}>
+              <Power className="mr-2 h-4 w-4" />
+              停止手机远程
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              onClick={() => void startRemote()}
+              disabled={!configurationReady || state === "starting"}
+            >
+              <Link2 className="mr-2 h-4 w-4" />
+              {state === "starting" ? "正在启用" : "启用手机远程"}
+            </Button>
+          )}
         </CardContent>
       </Card>
     </div>

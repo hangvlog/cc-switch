@@ -91,6 +91,25 @@ pub fn get_codex_remote_status(
 }
 
 #[tauri::command]
+pub fn get_clawkit_codex_configuration_status(
+) -> crate::clawkit_codex_config::ClawkitCodexConfigurationStatus {
+    crate::clawkit_codex_config::status()
+}
+
+#[tauri::command]
+pub async fn configure_clawkit_codex(
+) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
+    let gateway = crate::clawkit_gateway::bootstrap().await?;
+    crate::clawkit_codex_config::apply(&gateway)
+}
+
+#[tauri::command]
+pub fn rollback_clawkit_codex_configuration(
+) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
+    crate::clawkit_codex_config::rollback()
+}
+
+#[tauri::command]
 pub async fn start_codex_remote_server(
     codex_home_override: Option<String>,
     app: AppHandle,
@@ -104,48 +123,29 @@ pub async fn start_codex_remote_server(
         }
     }
 
-    let gateway = crate::clawkit_gateway::bootstrap().await?;
-    let catalog_path = crate::clawkit_gateway::write_model_catalog(&gateway.models)?;
-    let default_model = crate::clawkit_gateway::preferred_default_model(&gateway.models)
-        .ok_or_else(|| "当前账号没有可用的 API 模型".to_string())?
-        .to_string();
+    let configuration = crate::clawkit_codex_config::status();
+    if !configuration.configured {
+        return Err("请先完成 Codex 一键配置".to_string());
+    }
+    let default_model = configuration
+        .model
+        .clone()
+        .ok_or_else(|| "Codex 配置缺少默认模型".to_string())?;
     let codex_home = validate_codex_home(codex_home_override)?;
-    let binary = std::env::var("CODEX_REMOTE_CODEX_BIN").unwrap_or_else(|_| "codex".into());
-    let mut command = Command::new(binary);
+    let binary = super::remote_codex_cli::find_codex_cli().ok_or_else(|| {
+        "手机远程需要 Codex app-server，但未找到 Codex Desktop 内置 CLI 或全局 Codex CLI；一键配置和桌面端使用不受影响".to_string()
+    })?;
+    let mut command = super::remote_codex_cli::codex_command(&binary);
     command
-        .arg("-c")
-        .arg(toml_override("model_provider", "clawkit"))
-        .arg("-c")
-        .arg(toml_override("model", &default_model))
-        .arg("-c")
-        .arg(toml_override(
-            "model_catalog_json",
-            catalog_path.to_string_lossy().as_ref(),
-        ))
-        .arg("-c")
-        .arg(toml_override("model_providers.clawkit.name", "ClawKit API"))
-        .arg("-c")
-        .arg(toml_override(
-            "model_providers.clawkit.base_url",
-            &gateway.base_url,
-        ))
-        .arg("-c")
-        .arg(toml_override(
-            "model_providers.clawkit.env_key",
-            "CLAWKIT_CODEX_API_KEY",
-        ))
-        .arg("-c")
-        .arg(toml_override(
-            "model_providers.clawkit.wire_api",
-            "responses",
-        ))
-        .arg("-c")
-        .arg("model_providers.clawkit.requires_openai_auth=false")
         .arg("app-server")
-        .env("CLAWKIT_CODEX_API_KEY", &gateway.api_key)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000);
+    }
     if let Some(path) = codex_home {
         command.env("CODEX_HOME", path);
     }
@@ -200,9 +200,9 @@ pub async fn start_codex_remote_server(
             child,
             stdin,
             model: default_model,
-            models: gateway.models,
-            available_quota: gateway.available_quota,
-            used_quota: gateway.used_quota,
+            models: configuration.models.clone(),
+            available_quota: configuration.available_quota.unwrap_or_default(),
+            used_quota: configuration.used_quota.unwrap_or_default(),
         };
         let _ = duplicate.child.kill();
         return Ok(server_status(&mut process));
@@ -211,18 +211,11 @@ pub async fn start_codex_remote_server(
         child,
         stdin,
         model: default_model,
-        models: gateway.models,
-        available_quota: gateway.available_quota,
-        used_quota: gateway.used_quota,
+        models: configuration.models,
+        available_quota: configuration.available_quota.unwrap_or_default(),
+        used_quota: configuration.used_quota.unwrap_or_default(),
     });
     Ok(server_status(&mut process))
-}
-
-fn toml_override(key: &str, value: &str) -> String {
-    format!(
-        "{key}={}",
-        serde_json::to_string(value).unwrap_or_else(|_| "\"\"".to_string())
-    )
 }
 
 #[tauri::command]
@@ -367,7 +360,7 @@ fn find_codex_plus_plus_on_path(path: Option<std::ffi::OsString>) -> Option<Path
 #[cfg(test)]
 mod tests {
     use super::{
-        codex_plus_plus_status, find_codex_plus_plus_on_path, toml_override, validate_codex_home,
+        codex_plus_plus_status, find_codex_plus_plus_on_path, validate_codex_home,
     };
 
     #[test]
@@ -406,11 +399,4 @@ mod tests {
         assert!(!marker.exists());
     }
 
-    #[test]
-    fn gateway_secret_stays_out_of_codex_arguments() {
-        assert_eq!(
-            toml_override("model_providers.clawkit.env_key", "CLAWKIT_CODEX_API_KEY"),
-            r#"model_providers.clawkit.env_key="CLAWKIT_CODEX_API_KEY""#
-        );
-    }
 }
