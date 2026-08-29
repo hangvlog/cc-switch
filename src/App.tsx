@@ -27,7 +27,7 @@ import {
   LayoutDashboard,
   Loader2,
   RefreshCw,
-  Smartphone,
+  Sparkles,
 } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Provider, VisibleApps } from "@/types";
@@ -109,6 +109,7 @@ import AgentsDefaultsPanel from "@/components/openclaw/AgentsDefaultsPanel";
 import OpenClawHealthBanner from "@/components/openclaw/OpenClawHealthBanner";
 import HermesMemoryPanel from "@/components/hermes/HermesMemoryPanel";
 import { RemoteControlPage } from "@/components/remote/RemoteControlPage";
+import { CodexQuickSetupHero } from "@/components/remote/CodexQuickSetupHero";
 import {
   APP_IDS,
   DEFAULT_VISIBLE_APPS,
@@ -1112,6 +1113,12 @@ function App() {
                     transition={{ duration: 0.15 }}
                     className="space-y-4"
                   >
+                    <CodexQuickSetupHero
+                      onConfigure={() => {
+                        setActiveApp("codex");
+                        setCurrentView("remote");
+                      }}
+                    />
                     <ProviderList
                       providers={providers}
                       currentProviderId={currentProviderId}
@@ -1324,7 +1331,7 @@ function App() {
                       defaultValue: "统一供应商",
                     })}
                   {currentView === "sessions" && t("sessionManager.title")}
-                  {currentView === "remote" && "手机远程控制"}
+                  {currentView === "remote" && "一键配置 Codex"}
                   {currentView === "workspace" && t("workspace.title")}
                   {currentView === "openclawEnv" && t("openclaw.env.title")}
                   {currentView === "openclawTools" && t("openclaw.tools.title")}
@@ -1736,13 +1743,14 @@ function App() {
                               )}
                               {activeApp === "codex" && (
                                 <Button
-                                  variant="ghost"
+                                  variant="default"
                                   size="sm"
                                   onClick={() => setCurrentView("remote")}
-                                  className="text-muted-foreground hover:text-foreground hover:bg-black/5 dark:hover:bg-white/5 w-8 px-2"
-                                  title="手机远程控制"
+                                  className="ml-1 h-8 shrink-0 px-3 shadow-sm"
+                                  title="一键配置 Codex"
                                 >
-                                  <Smartphone className="h-4 w-4" />
+                                  <Sparkles className="mr-1.5 h-4 w-4" />
+                                  一键配置
                                 </Button>
                               )}
                             </>

@@ -1,6 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import { Check, Link2, LogOut, Play, Power, RefreshCw } from "lucide-react";
+import {
+  Check,
+  Link2,
+  LogOut,
+  Play,
+  Power,
+  RefreshCw,
+  ShieldCheck,
+  Sparkles,
+} from "lucide-react";
 import { toast } from "sonner";
 import { remoteApi, type CodexPlusPlusStatus } from "@/lib/api/remote";
 import {
@@ -20,6 +29,7 @@ export function RemoteControlPage() {
   const [accountLoaded, setAccountLoaded] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [state, setState] = useState<BridgeState>("idle");
+  const [configurationReady, setConfigurationReady] = useState(false);
   const [peerOnline, setPeerOnline] = useState(false);
   const [plusPlus, setPlusPlus] = useState<CodexPlusPlusStatus | null>(null);
   const relaySocket = useRef<WebSocket | null>(null);
@@ -40,7 +50,14 @@ export function RemoteControlPage() {
       .status()
       .then((status) => setAccount(status.authenticated ? status : null))
       .finally(() => setAccountLoaded(true));
-    void remoteApi.codexPlusPlusStatus().then(setPlusPlus).catch(() => null);
+    void remoteApi
+      .codexPlusPlusStatus()
+      .then(setPlusPlus)
+      .catch(() => null);
+    void remoteApi
+      .status()
+      .then((status) => setConfigurationReady(status.running))
+      .catch(() => null);
     return closeSockets;
   }, [closeSockets]);
 
@@ -51,7 +68,9 @@ export function RemoteControlPage() {
       "codex-remote-message",
       (event) => {
         if (relay.readyState === WebSocket.OPEN) {
-          relay.send(JSON.stringify({ type: "relay.data", payload: event.payload }));
+          relay.send(
+            JSON.stringify({ type: "relay.data", payload: event.payload }),
+          );
         }
       },
     );
@@ -80,14 +99,26 @@ export function RemoteControlPage() {
     setState("starting");
     closeSockets();
     try {
-      await remoteApi.start();
+      const status = await remoteApi.start();
+      setConfigurationReady(status.running);
+    } catch (error) {
+      setConfigurationReady(false);
+      setState("error");
+      const status = await remoteAccountApi.status().catch(() => null);
+      if (status && !status.authenticated) setAccount(null);
+      toast.error(extractErrorMessage(error) || "Codex 配置失败");
+      return;
+    }
+
+    try {
       const ticket = await remoteAccountApi.createSocketTicket();
       await connectBridge(ticket.websocketUrl);
     } catch (error) {
       setState("error");
-      const status = await remoteAccountApi.status().catch(() => null);
-      if (status && !status.authenticated) setAccount(null);
-      toast.error(extractErrorMessage(error) || "远程服务启动失败");
+      toast.warning(
+        extractErrorMessage(error) ||
+          "Codex 已配置完成，但手机远程连接暂不可用",
+      );
     }
   }, [account, closeSockets, connectBridge]);
 
@@ -104,7 +135,7 @@ export function RemoteControlPage() {
     try {
       const session = await remoteAccountApi.login(username, password);
       setAccount(session);
-      toast.success("登录成功，模型与手机连接正在自动配置");
+      toast.success("登录成功，正在一键配置 Codex");
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
@@ -115,6 +146,7 @@ export function RemoteControlPage() {
   const stop = async () => {
     closeSockets();
     await remoteApi.stop();
+    setConfigurationReady(false);
     setState("idle");
   };
 
@@ -135,7 +167,11 @@ export function RemoteControlPage() {
   };
 
   if (!accountLoaded) {
-    return <div className="px-6 py-8 text-sm text-muted-foreground">正在读取 ClawKit 登录状态…</div>;
+    return (
+      <div className="px-6 py-8 text-sm text-muted-foreground">
+        正在读取 ClawKit 登录状态…
+      </div>
+    );
   }
 
   if (!account) {
@@ -146,69 +182,136 @@ export function RemoteControlPage() {
     );
   }
 
-  const statusLabel = state === "connected" ? "手机已连接" : state === "waiting"
-    ? "等待同账号手机" : state === "starting" ? "正在配置模型"
-      : state === "error" ? "连接异常" : "已停止";
-  const displayName = account.user?.nickname || account.user?.username || "ClawKit 用户";
+  const statusLabel = configurationReady
+    ? "配置完成"
+    : state === "starting"
+      ? "正在配置"
+      : state === "error"
+        ? "配置失败"
+        : "尚未配置";
+  const displayName =
+    account.user?.nickname || account.user?.username || "ClawKit 用户";
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-8 pt-4">
-      <Card>
+      <Card className="overflow-hidden border-primary/25 shadow-sm">
+        <div className="h-1 bg-gradient-to-r from-primary via-primary/60 to-transparent" />
         <CardHeader className="flex-row items-center justify-between space-y-0">
-          <div>
-            <CardTitle className="text-base">手机远程控制</CardTitle>
-            <p className="mt-1 text-sm text-muted-foreground">
-              已登录 {displayName}；账号模型、网关和手机连接均由应用自动配置。
-            </p>
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <Sparkles className="h-5 w-5" />
+            </div>
+            <div>
+              <CardTitle className="text-lg">一键配置 Codex</CardTitle>
+              <p className="mt-1 text-sm text-muted-foreground">
+                已登录 {displayName}；账号模型、API
+                网关和安全连接均由应用自动配置。
+              </p>
+            </div>
           </div>
-          <Badge variant={peerOnline ? "default" : "secondary"}>{statusLabel}</Badge>
+          <Badge variant={configurationReady ? "default" : "secondary"}>
+            {statusLabel}
+          </Badge>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="flex items-center justify-between rounded-md border px-3 py-3">
-            <div>
-              <div className="text-sm font-medium">ClawKit 账号安全中继</div>
-              <div className="text-xs text-muted-foreground">
-                无需填写 Base URL 或 API Key；凭据仅注入后台 Codex 进程。
+            <div className="flex items-start gap-3">
+              <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
+              <div>
+                <div className="text-sm font-medium">
+                  ClawKit Codex 独立安全环境
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  无需填写 Base URL 或 API Key；凭据仅注入独立 Codex
+                  进程，不修改官方 Codex。
+                </div>
               </div>
             </div>
           </div>
           <div className="flex justify-between gap-2">
             <Button variant="ghost" onClick={() => void logout()}>
-              <LogOut className="mr-2 h-4 w-4" />退出账号
+              <LogOut className="mr-2 h-4 w-4" />
+              退出账号
             </Button>
             <div className="flex gap-2">
               {state !== "idle" ? (
                 <>
-                  <Button variant="outline" onClick={() => void start()} disabled={state === "starting"}>
-                    <RefreshCw className="mr-2 h-4 w-4" />重新连接
+                  <Button
+                    variant="outline"
+                    onClick={() => void start()}
+                    disabled={state === "starting"}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    重新配置
                   </Button>
-                  <Button variant="destructive" onClick={() => void stop()}>
-                    <Power className="mr-2 h-4 w-4" />停止
+                  <Button variant="outline" onClick={() => void stop()}>
+                    <Power className="mr-2 h-4 w-4" />
+                    停止连接
                   </Button>
                 </>
               ) : (
                 <Button onClick={() => void start()}>
-                  <Link2 className="mr-2 h-4 w-4" />启动连接
+                  <Link2 className="mr-2 h-4 w-4" />
+                  立即一键配置
                 </Button>
               )}
             </div>
           </div>
         </CardContent>
       </Card>
-      <Card>
-        <CardHeader><CardTitle className="text-base">Codex 桌面增强</CardTitle></CardHeader>
+      <Card
+        className={
+          configurationReady
+            ? "border-emerald-500/30 bg-emerald-500/5"
+            : undefined
+        }
+      >
+        <CardHeader>
+          <CardTitle className="text-base">
+            {configurationReady
+              ? "配置已完成，现在启动 Codex"
+              : "Codex 桌面增强"}
+          </CardTitle>
+        </CardHeader>
         <CardContent className="flex items-center justify-between gap-3 text-sm">
           <div className="flex items-start gap-3">
-            {plusPlus?.installed
-              ? <Check className="mt-0.5 h-4 w-4 text-emerald-500" />
-              : <Power className="mt-0.5 h-4 w-4 text-muted-foreground" />}
-            <div>{plusPlus?.summary || "ClawKit Codex 增强层随安装包提供。"}</div>
+            {plusPlus?.installed ? (
+              <Check className="mt-0.5 h-4 w-4 text-emerald-500" />
+            ) : (
+              <Power className="mt-0.5 h-4 w-4 text-muted-foreground" />
+            )}
+            <div>
+              {plusPlus?.summary || "ClawKit Codex 增强层随安装包提供。"}
+            </div>
           </div>
           {plusPlus?.installed ? (
-            <Button size="sm" onClick={() => void launchCodex()}>
-              <Play className="mr-1.5 h-4 w-4" />启动 Codex
+            <Button
+              size={configurationReady ? "default" : "sm"}
+              onClick={() => void launchCodex()}
+            >
+              <Play className="mr-1.5 h-4 w-4" />
+              启动 Codex
             </Button>
           ) : null}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardContent className="flex items-center justify-between gap-3 py-4 text-sm">
+          <div>
+            <div className="font-medium">手机远程连接（可选）</div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              手机与桌面登录同一账号后可自动连接，不影响一键配置和本机使用。
+            </div>
+          </div>
+          <Badge variant={peerOnline ? "default" : "secondary"}>
+            {peerOnline
+              ? "手机已连接"
+              : state === "error"
+                ? "手机连接异常"
+                : configurationReady
+                  ? "等待同账号手机"
+                  : "未启用"}
+          </Badge>
         </CardContent>
       </Card>
     </div>

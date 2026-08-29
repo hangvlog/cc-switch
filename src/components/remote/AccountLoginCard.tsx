@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { LogIn } from "lucide-react";
+import { LogIn, ShieldCheck, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -15,11 +15,15 @@ export function AccountLoginCard({
   const [password, setPassword] = useState("");
 
   return (
-    <Card>
+    <Card className="border-primary/25 shadow-sm">
       <CardHeader>
-        <CardTitle className="text-base">登录 ClawKit 账号</CardTitle>
-        <p className="text-sm text-muted-foreground">
-          手机与桌面登录同一账号后会自动发现并连接，无需配对码。
+        <div className="mb-1 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 text-primary">
+          <Sparkles className="h-5 w-5" />
+        </div>
+        <CardTitle className="text-lg">登录后自动完成 Codex 配置</CardTitle>
+        <p className="text-sm leading-6 text-muted-foreground">
+          使用 ClawKit 账号登录，应用会自动获取账号可用模型、API
+          网关和安全连接，无需填写任何技术参数。
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -49,8 +53,12 @@ export function AccountLoginCard({
           onClick={() => void onLogin(username.trim(), password)}
         >
           <LogIn className="mr-2 h-4 w-4" />
-          {busy ? "正在登录" : "登录并自动连接"}
+          {busy ? "正在登录并配置" : "登录并一键配置"}
         </Button>
+        <p className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
+          <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
+          零侵入：不会覆盖官方 Codex 配置，也不会修改桌面图标
+        </p>
       </CardContent>
     </Card>
   );
