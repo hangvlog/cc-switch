@@ -46,6 +46,32 @@ export const handlers = [
   http.post(`${TAURI_ENDPOINT}/get_skills_migration_result`, () =>
     success(null),
   ),
+  http.post(`${TAURI_ENDPOINT}/get_clawkit_account_status`, () =>
+    success({
+      status: "logged_out",
+      authenticated: false,
+      user: null,
+    }),
+  ),
+  http.post(
+    `${TAURI_ENDPOINT}/get_clawkit_codex_configuration_status`,
+    () =>
+      success({
+        configured: false,
+        models: [],
+        configPath: "/default/codex/config.toml",
+        canRollback: false,
+      }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_codex_remote_status`, () =>
+    success({ running: false, models: [] }),
+  ),
+  http.post(`${TAURI_ENDPOINT}/get_codex_plus_plus_status`, () =>
+    success({
+      installed: false,
+      summary: "ClawKit Codex 增强层尚未安装",
+    }),
+  ),
   http.post(`${TAURI_ENDPOINT}/list_profiles`, () => success([])),
   http.post(`${TAURI_ENDPOINT}/get_providers`, async ({ request }) => {
     const { app } = await withJson<{ app: AppId }>(request);
