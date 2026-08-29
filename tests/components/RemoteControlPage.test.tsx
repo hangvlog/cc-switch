@@ -10,10 +10,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   listen: vi.fn(),
   unlisten: vi.fn(),
-  status: vi.fn(),
-  start: vi.fn(),
+  configurationStatus: vi.fn(),
+  configure: vi.fn(),
+  rollbackConfiguration: vi.fn(),
+  remoteStatus: vi.fn(),
+  startRemote: vi.fn(),
   send: vi.fn(),
-  stop: vi.fn(),
+  stopRemote: vi.fn(),
   plusPlus: vi.fn(),
   launchPlusPlus: vi.fn(),
   accountStatus: vi.fn(),
@@ -22,15 +25,19 @@ const mocks = vi.hoisted(() => ({
   socketTicket: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
+  toastWarning: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 vi.mock("@/lib/api/remote", () => ({
   remoteApi: {
-    status: mocks.status,
-    start: mocks.start,
+    configurationStatus: mocks.configurationStatus,
+    configure: mocks.configure,
+    rollbackConfiguration: mocks.rollbackConfiguration,
+    remoteStatus: mocks.remoteStatus,
+    startRemote: mocks.startRemote,
     send: mocks.send,
-    stop: mocks.stop,
+    stopRemote: mocks.stopRemote,
     codexPlusPlusStatus: mocks.plusPlus,
     launchCodexPlusPlus: mocks.launchPlusPlus,
   },
@@ -44,7 +51,11 @@ vi.mock("@/lib/api/remoteAccount", () => ({
   },
 }));
 vi.mock("sonner", () => ({
-  toast: { error: mocks.toastError, success: mocks.toastSuccess },
+  toast: {
+    error: mocks.toastError,
+    success: mocks.toastSuccess,
+    warning: mocks.toastWarning,
+  },
 }));
 
 import { RemoteControlPage } from "@/components/remote/RemoteControlPage";
@@ -88,7 +99,7 @@ async function login() {
     target: { value: "secret" },
   });
   fireEvent.click(screen.getByRole("button", { name: /登录并一键配置/ }));
-  await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+  await waitFor(() => expect(mocks.configure).toHaveBeenCalledOnce());
 }
 
 describe("RemoteControlPage", () => {
@@ -96,9 +107,26 @@ describe("RemoteControlPage", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     FakeWebSocket.instances = [];
     mocks.listen.mockResolvedValue(mocks.unlisten);
-    mocks.status.mockResolvedValue({ running: false });
-    mocks.start.mockResolvedValue({ running: true });
-    mocks.stop.mockResolvedValue({ running: false });
+    mocks.configurationStatus.mockResolvedValue({
+      configured: false,
+      configPath: "/test/.codex/config.toml",
+      canRollback: false,
+    });
+    mocks.configure.mockResolvedValue({
+      configured: true,
+      model: "gpt-5.6-sol",
+      models: ["gpt-5.6-sol"],
+      configPath: "/test/.codex/config.toml",
+      canRollback: true,
+    });
+    mocks.rollbackConfiguration.mockResolvedValue({
+      configured: false,
+      configPath: "/test/.codex/config.toml",
+      canRollback: false,
+    });
+    mocks.remoteStatus.mockResolvedValue({ running: false });
+    mocks.startRemote.mockResolvedValue({ running: true });
+    mocks.stopRemote.mockResolvedValue({ running: false });
     mocks.send.mockResolvedValue(undefined);
     mocks.plusPlus.mockResolvedValue({ installed: false, summary: "optional" });
     mocks.launchPlusPlus.mockResolvedValue(undefined);
@@ -125,12 +153,27 @@ describe("RemoteControlPage", () => {
     });
   });
 
-  it("logs in and automatically starts an account-scoped bridge", async () => {
+  it("logs in and configures Codex without starting a process or remote bridge", async () => {
     render(<RemoteControlPage />);
     await login();
 
-    expect(mocks.start).toHaveBeenCalledWith();
     expect(mocks.accountLogin).toHaveBeenCalledWith("hang", "secret");
+    expect(mocks.configure).toHaveBeenCalledWith();
+    expect(mocks.startRemote).not.toHaveBeenCalled();
+    expect(mocks.socketTicket).not.toHaveBeenCalled();
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(
+      await screen.findByText("配置已完成，现在启动 Codex"),
+    ).toBeInTheDocument();
+  });
+
+  it("starts the optional phone bridge only after an explicit click", async () => {
+    render(<RemoteControlPage />);
+    await login();
+
+    fireEvent.click(screen.getByRole("button", { name: /启用手机远程/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(mocks.startRemote).toHaveBeenCalledWith();
     expect(mocks.socketTicket).toHaveBeenCalledOnce();
     const socket = FakeWebSocket.instances[0];
     expect(socket.url).toBe(
@@ -165,7 +208,8 @@ describe("RemoteControlPage", () => {
     render(<RemoteControlPage />);
     expect(await screen.findByText(/已登录 hang/)).toBeInTheDocument();
     expect(screen.queryByLabelText("密码")).not.toBeInTheDocument();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.configure).not.toHaveBeenCalled();
+    expect(mocks.startRemote).not.toHaveBeenCalled();
     expect(mocks.socketTicket).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
@@ -177,18 +221,45 @@ describe("RemoteControlPage", () => {
 
     await waitFor(() => expect(mocks.plusPlus).toHaveBeenCalledOnce());
     expect(mocks.launchPlusPlus).not.toHaveBeenCalled();
-    expect(mocks.start).not.toHaveBeenCalled();
+    expect(mocks.startRemote).not.toHaveBeenCalled();
   });
 
   it("stops the native app-server and account relay together", async () => {
     render(<RemoteControlPage />);
     await login();
+    fireEvent.click(screen.getByRole("button", { name: /启用手机远程/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     const socket = FakeWebSocket.instances[0];
-    fireEvent.click(screen.getByRole("button", { name: /停止/ }));
-    await waitFor(() => expect(mocks.stop).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: /停止手机远程/ }));
+    await waitFor(() => expect(mocks.stopRemote).toHaveBeenCalledOnce());
     expect(socket.closed).toBe(true);
     expect(mocks.unlisten).toHaveBeenCalledOnce();
-    expect(screen.getByText("已停止")).toBeInTheDocument();
+    expect(screen.getByText("未启用")).toBeInTheDocument();
+    expect(screen.getByText("配置完成")).toBeInTheDocument();
+  });
+
+  it("keeps configuration successful when the optional CLI is missing", async () => {
+    mocks.startRemote.mockRejectedValue(new Error("程序未找到"));
+    render(<RemoteControlPage />);
+    await login();
+
+    fireEvent.click(screen.getByRole("button", { name: /启用手机远程/ }));
+
+    await waitFor(() => expect(mocks.toastWarning).toHaveBeenCalled());
+    expect(screen.getByText("配置完成")).toBeInTheDocument();
+    expect(screen.getByText("手机连接异常")).toBeInTheDocument();
+  });
+
+  it("offers a one-click rollback after configuration", async () => {
+    render(<RemoteControlPage />);
+    await login();
+
+    fireEvent.click(screen.getByRole("button", { name: "恢复配置" }));
+
+    await waitFor(() =>
+      expect(mocks.rollbackConfiguration).toHaveBeenCalledOnce(),
+    );
+    expect(screen.getByText("尚未配置")).toBeInTheDocument();
   });
 
   it("uses account login as the default instead of a pairing code", () => {

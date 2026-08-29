@@ -17,7 +17,8 @@ describe("CodexQuickSetupHero", () => {
     expect(
       screen.getByText(/无需手动填写 Base URL 或 API Key/),
     ).toBeInTheDocument();
-    expect(screen.getByText(/不修改官方 Codex 配置与图标/)).toBeInTheDocument();
+    expect(screen.getByText(/保留原配置与登录状态/)).toBeInTheDocument();
+    expect(screen.getByText(/不修改图标/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /立即一键配置/ }));
     expect(onConfigure).toHaveBeenCalledOnce();

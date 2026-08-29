@@ -23,6 +23,7 @@ mod profile;
 mod prompt;
 mod provider;
 mod proxy;
+mod remote_codex_cli;
 mod remote_control;
 mod session_manager;
 mod settings;

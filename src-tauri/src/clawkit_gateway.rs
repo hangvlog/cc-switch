@@ -5,7 +5,6 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 
 const DEFAULT_GATEWAY_API_BASE: &str = "https://api.clawkit.chat";
-const MODEL_CATALOG_FILE: &str = "clawkit-models.json";
 
 #[derive(Debug, Clone)]
 pub struct GatewayBootstrap {
@@ -90,16 +89,7 @@ pub async fn bootstrap() -> Result<GatewayBootstrap, String> {
     })
 }
 
-pub fn write_model_catalog(models: &[String]) -> Result<PathBuf, String> {
-    write_model_catalog_at(
-        models,
-        crate::config::get_home_dir()
-            .join(".codex-session-delete")
-            .join(MODEL_CATALOG_FILE),
-    )
-}
-
-fn write_model_catalog_at(models: &[String], path: PathBuf) -> Result<PathBuf, String> {
+pub(crate) fn write_model_catalog_at(models: &[String], path: PathBuf) -> Result<PathBuf, String> {
     let mut unique = models
         .iter()
         .map(|model| model.trim())

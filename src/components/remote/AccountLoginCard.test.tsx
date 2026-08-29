@@ -17,6 +17,7 @@ describe("AccountLoginCard", () => {
     await user.click(screen.getByRole("button", { name: /登录并一键配置/ }));
 
     expect(onLogin).toHaveBeenCalledWith("15738079480", "test-password");
-    expect(screen.getByText(/不会覆盖官方 Codex 配置/)).toBeInTheDocument();
+    expect(screen.getByText(/仅定向更新配置/)).toBeInTheDocument();
+    expect(screen.getByText(/不修改 Codex 图标/)).toBeInTheDocument();
   });
 });
