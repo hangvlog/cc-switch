@@ -1,10 +1,14 @@
 use serde::Serialize;
 use serde_json::Value;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 struct ServerProcess {
     child: Child,
@@ -82,6 +86,68 @@ fn validate_codex_home(value: Option<String>) -> Result<Option<PathBuf>, String>
     Ok(Some(path))
 }
 
+fn codex_binary_names() -> &'static [&'static str] {
+    // npm installs the Windows entry point as `codex.cmd`; CreateProcess only
+    // resolves `.exe` from a bare name, so each directory is probed for these
+    // file names explicitly.
+    #[cfg(target_os = "windows")]
+    {
+        &["codex.exe", "codex.cmd", "codex.bat"]
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        &["codex"]
+    }
+}
+
+fn find_codex_in_dir(directory: &Path) -> Option<PathBuf> {
+    codex_binary_names()
+        .iter()
+        .map(|name| directory.join(name))
+        .find(|candidate| candidate.is_file())
+}
+
+fn find_codex_on_path(path_value: &OsStr) -> Option<PathBuf> {
+    std::env::split_paths(path_value)
+        .filter(|directory| !directory.as_os_str().is_empty())
+        .find_map(|directory| find_codex_in_dir(&directory))
+}
+
+/// Locates the Codex CLI without assuming it is reachable through the app's
+/// PATH: a GUI process launched from Finder or Explorer only inherits a
+/// minimal PATH, so a bare `Command::new("codex")` fails even on machines
+/// where the CLI is installed.
+fn find_codex_binary() -> Option<PathBuf> {
+    if let Some(explicit) = std::env::var_os("CODEX_REMOTE_CODEX_BIN") {
+        let explicit = PathBuf::from(explicit);
+        if explicit.is_file() {
+            return Some(explicit);
+        }
+        log::warn!(
+            "CODEX_REMOTE_CODEX_BIN points to a missing file: {}",
+            explicit.display()
+        );
+    }
+
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(directory) = current.parent() {
+            if let Some(bundled) = find_codex_in_dir(directory) {
+                return Some(bundled);
+            }
+        }
+    }
+
+    if let Some(path_value) = std::env::var_os("PATH") {
+        if let Some(found) = find_codex_on_path(&path_value) {
+            return Some(found);
+        }
+    }
+
+    crate::codex_config::codex_cli_candidates()
+        .into_iter()
+        .find(|candidate| candidate.is_absolute() && candidate.is_file())
+}
+
 #[tauri::command]
 pub fn get_codex_remote_status(
     state: State<'_, CodexRemoteState>,
@@ -110,8 +176,20 @@ pub async fn start_codex_remote_server(
         .ok_or_else(|| "当前账号没有可用的 API 模型".to_string())?
         .to_string();
     let codex_home = validate_codex_home(codex_home_override)?;
-    let binary = std::env::var("CODEX_REMOTE_CODEX_BIN").unwrap_or_else(|_| "codex".into());
-    let mut command = Command::new(binary);
+    let binary = find_codex_binary().ok_or_else(|| {
+        "未找到 Codex CLI：请先安装 Codex（npm install -g @openai/codex），\
+         或设置环境变量 CODEX_REMOTE_CODEX_BIN 指向 codex 可执行文件"
+            .to_string()
+    })?;
+    let mut command = Command::new(&binary);
+    // A release build uses the Windows GUI subsystem; without this flag a
+    // console child (especially `codex.cmd` via cmd.exe) opens its own
+    // transient console window.
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
     command
         .arg("-c")
         .arg(toml_override("model_provider", "clawkit"))
@@ -150,9 +228,12 @@ pub async fn start_codex_remote_server(
         command.env("CODEX_HOME", path);
     }
 
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("Unable to start Codex app-server: {error}"))?;
+    let mut child = command.spawn().map_err(|error| {
+        format!(
+            "无法启动 Codex app-server（{}）：{error}",
+            binary.display()
+        )
+    })?;
     let stdin = child
         .stdin
         .take()
@@ -383,7 +464,51 @@ fn find_codex_plus_plus_binary() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{toml_override, validate_codex_home};
+    use super::{find_codex_in_dir, find_codex_on_path, toml_override, validate_codex_home};
+    use std::fs;
+
+    #[test]
+    fn finds_codex_inside_directory() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert_eq!(find_codex_in_dir(dir.path()), None);
+
+        let name = if cfg!(target_os = "windows") {
+            "codex.cmd"
+        } else {
+            "codex"
+        };
+        let binary = dir.path().join(name);
+        fs::write(&binary, b"").expect("write stub");
+        assert_eq!(find_codex_in_dir(dir.path()), Some(binary));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn prefers_exe_over_cmd_shim() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("codex.cmd"), b"").expect("write cmd");
+        fs::write(dir.path().join("codex.exe"), b"").expect("write exe");
+        assert_eq!(
+            find_codex_in_dir(dir.path()),
+            Some(dir.path().join("codex.exe"))
+        );
+    }
+
+    #[test]
+    fn walks_every_path_entry() {
+        let empty = tempfile::tempdir().expect("tempdir");
+        let hit = tempfile::tempdir().expect("tempdir");
+        let name = if cfg!(target_os = "windows") {
+            "codex.exe"
+        } else {
+            "codex"
+        };
+        let binary = hit.path().join(name);
+        fs::write(&binary, b"").expect("write stub");
+
+        let joined = std::env::join_paths([empty.path(), hit.path()]).expect("join paths");
+        assert_eq!(find_codex_on_path(&joined), Some(binary));
+    }
 
     #[test]
     fn rejects_relative_test_config_roots() {
