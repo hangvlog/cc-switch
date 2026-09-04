@@ -25,23 +25,53 @@ pub(super) fn find_codex_cli() -> Option<PathBuf> {
         }
     }
 
-    platform_codex_cli_candidates()
+    bundled_codex_cli_candidates()
         .into_iter()
+        .chain(platform_codex_cli_candidates())
         .chain(codex_cli_candidates_on_path(std::env::var_os("PATH")))
         .find(|candidate| candidate.is_file())
+        .or_else(|| {
+            // A GUI launch from Finder or Explorer only inherits a minimal
+            // PATH, so fall back to the shared list of well-known install
+            // locations (Homebrew, nvm/fnm/volta/asdf/mise shims, npm
+            // prefixes, %APPDATA%\npm, ...).
+            crate::codex_config::codex_cli_candidates()
+                .into_iter()
+                .find(|candidate| candidate.is_absolute() && candidate.is_file())
+        })
+}
+
+fn codex_binary_names() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") {
+        &["codex.exe", "codex.cmd", "codex.bat"]
+    } else {
+        &["codex"]
+    }
+}
+
+fn bundled_codex_cli_candidates() -> Vec<PathBuf> {
+    let Ok(current) = std::env::current_exe() else {
+        return Vec::new();
+    };
+    let Some(directory) = current.parent() else {
+        return Vec::new();
+    };
+    codex_binary_names()
+        .iter()
+        .map(|name| directory.join(name))
+        .collect()
 }
 
 fn codex_cli_candidates_on_path(path: Option<std::ffi::OsString>) -> Vec<PathBuf> {
     let Some(path) = path else {
         return Vec::new();
     };
-    let names: &[&str] = if cfg!(target_os = "windows") {
-        &["codex.exe", "codex.cmd", "codex.bat"]
-    } else {
-        &["codex"]
-    };
     std::env::split_paths(&path)
-        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .flat_map(|directory| {
+            codex_binary_names()
+                .iter()
+                .map(move |name| directory.join(name))
+        })
         .collect()
 }
 
@@ -110,7 +140,18 @@ fn append_windows_store_codex_candidates(candidates: &mut Vec<PathBuf>, root: &P
 
 #[cfg(test)]
 mod tests {
-    use super::codex_cli_candidates_on_path;
+    use super::{bundled_codex_cli_candidates, codex_cli_candidates_on_path};
+
+    #[test]
+    fn bundled_candidates_stay_next_to_the_executable() {
+        let current = std::env::current_exe().expect("current exe");
+        let directory = current.parent().expect("exe parent");
+        let candidates = bundled_codex_cli_candidates();
+        assert!(!candidates.is_empty());
+        assert!(candidates
+            .iter()
+            .all(|candidate| candidate.parent() == Some(directory)));
+    }
 
     #[test]
     fn finds_global_codex_cli_candidates_without_executing_them() {
