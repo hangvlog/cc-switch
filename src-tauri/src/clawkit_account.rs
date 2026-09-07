@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+mod transport;
+
+use transport::{http_client_builder, post_json_with_direct_fallback};
+
 const DEFAULT_ACCOUNT_API_BASE: &str = "https://image.clawkit.chat";
 const DEFAULT_RELAY_API_BASE: &str = "https://clawkit.chat";
 const SESSION_FILE: &str = "clawkit-account.json";
@@ -27,6 +31,7 @@ pub struct ClawkitAccountClient {
     relay_api_base: String,
     session_path: PathBuf,
     client: reqwest::Client,
+    direct_client: reqwest::Client,
 }
 
 impl Default for ClawkitAccountClient {
@@ -53,10 +58,11 @@ impl ClawkitAccountClient {
     ) -> Result<Self, String> {
         let account_api_base = normalize_api_base(&account_api_base.into())?;
         let relay_api_base = normalize_api_base(&relay_api_base.into())?;
-        let client = reqwest::Client::builder()
-            .user_agent(format!("ClawKit-Desktop/{}", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(std::time::Duration::from_secs(8))
-            .timeout(std::time::Duration::from_secs(20))
+        let client = http_client_builder()
+            .build()
+            .map_err(|error| error.to_string())?;
+        let direct_client = http_client_builder()
+            .no_proxy()
             .build()
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -64,6 +70,7 @@ impl ClawkitAccountClient {
             relay_api_base,
             session_path: session_path.into(),
             client,
+            direct_client,
         })
     }
 
@@ -86,13 +93,9 @@ impl ClawkitAccountClient {
             .unwrap_or_else(|| format!("clawkit-desktop-{}", Uuid::new_v4()));
         let (endpoint, payload) =
             login_request(&self.account_api_base, username, password, &device_id);
-        let response = self
-            .client
-            .post(endpoint)
-            .json(&payload)
-            .send()
-            .await
-            .map_err(|_| "无法连接 ClawKit 账号服务".to_string())?;
+        let response =
+            post_json_with_direct_fallback(&self.client, &self.direct_client, &endpoint, &payload)
+                .await?;
         let status = response.status();
         let body = response.json::<Value>().await.unwrap_or(Value::Null);
         if !status.is_success() || body.get("code").and_then(Value::as_i64) != Some(200) {
