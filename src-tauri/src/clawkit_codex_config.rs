@@ -72,6 +72,7 @@ pub fn status() -> ClawkitCodexConfigurationStatus {
     status_from_home(&crate::codex_config::get_codex_config_dir())
 }
 
+#[cfg(test)]
 fn apply_at_home(
     gateway: &crate::clawkit_gateway::GatewayBootstrap,
     home: &Path,
@@ -148,6 +149,7 @@ fn write_config_at(path: &Path, contents: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 fn rollback_at_home(home: &Path) -> Result<ClawkitCodexConfigurationStatus, String> {
     let backup_dir =
         latest_backup_dir(home).ok_or_else(|| "没有可恢复的 Codex 配置备份".to_string())?;
