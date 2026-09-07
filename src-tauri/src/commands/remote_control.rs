@@ -104,6 +104,12 @@ pub async fn configure_clawkit_codex(
 }
 
 #[tauri::command]
+pub async fn upload_clawkit_diagnostic_bundle(
+) -> Result<crate::diagnostic_bundle::DiagnosticBundleUpload, String> {
+    crate::diagnostic_bundle::create_and_upload().await
+}
+
+#[tauri::command]
 pub fn rollback_clawkit_codex_configuration(
 ) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
     crate::clawkit_codex_config::rollback()

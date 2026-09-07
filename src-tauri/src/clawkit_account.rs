@@ -179,6 +179,14 @@ impl ClawkitAccountClient {
         Ok((session.token, session.device_id))
     }
 
+    pub fn diagnostics_upload_context(&self) -> Result<(String, String), String> {
+        let session = self.load_active_session()?;
+        Ok((
+            format!("{}/api/diagnostics/bundles", self.relay_api_base),
+            session.token,
+        ))
+    }
+
     fn load_active_session(&self) -> Result<StoredSession, String> {
         let session = self.load_session()?;
         if session.expires_at <= unix_timestamp() {

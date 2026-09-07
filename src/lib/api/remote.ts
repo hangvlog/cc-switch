@@ -23,6 +23,13 @@ export interface CodexPlusPlusStatus {
   summary: string;
 }
 
+export interface DiagnosticBundleUpload {
+  bundleId: string;
+  url: string;
+  expiresAt: number;
+  expiresInSeconds: number;
+}
+
 export const remoteApi = {
   configurationStatus: () =>
     invoke<ClawkitCodexConfigurationStatus>(
@@ -30,6 +37,8 @@ export const remoteApi = {
     ),
   configure: () =>
     invoke<ClawkitCodexConfigurationStatus>("configure_clawkit_codex"),
+  uploadDiagnosticBundle: () =>
+    invoke<DiagnosticBundleUpload>("upload_clawkit_diagnostic_bundle"),
   rollbackConfiguration: () =>
     invoke<ClawkitCodexConfigurationStatus>(
       "rollback_clawkit_codex_configuration",

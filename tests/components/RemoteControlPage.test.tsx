@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   unlisten: vi.fn(),
   configurationStatus: vi.fn(),
   configure: vi.fn(),
+  uploadDiagnosticBundle: vi.fn(),
   rollbackConfiguration: vi.fn(),
   remoteStatus: vi.fn(),
   startRemote: vi.fn(),
@@ -26,6 +27,8 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   toastWarning: vi.fn(),
+  copyText: vi.fn(),
+  openExternal: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
@@ -33,6 +36,7 @@ vi.mock("@/lib/api/remote", () => ({
   remoteApi: {
     configurationStatus: mocks.configurationStatus,
     configure: mocks.configure,
+    uploadDiagnosticBundle: mocks.uploadDiagnosticBundle,
     rollbackConfiguration: mocks.rollbackConfiguration,
     remoteStatus: mocks.remoteStatus,
     startRemote: mocks.startRemote,
@@ -41,6 +45,10 @@ vi.mock("@/lib/api/remote", () => ({
     codexPlusPlusStatus: mocks.plusPlus,
     launchCodexPlusPlus: mocks.launchPlusPlus,
   },
+}));
+vi.mock("@/lib/clipboard", () => ({ copyText: mocks.copyText }));
+vi.mock("@/lib/api/settings", () => ({
+  settingsApi: { openExternal: mocks.openExternal },
 }));
 vi.mock("@/lib/api/remoteAccount", () => ({
   remoteAccountApi: {
@@ -119,6 +127,14 @@ describe("RemoteControlPage", () => {
       configPath: "/test/.codex/config.toml",
       canRollback: true,
     });
+    mocks.uploadDiagnosticBundle.mockResolvedValue({
+      bundleId: "bundle-1",
+      url: "https://diagnostics.example/bundle.zip?signature=test",
+      expiresAt: 123456,
+      expiresInSeconds: 604800,
+    });
+    mocks.copyText.mockResolvedValue(undefined);
+    mocks.openExternal.mockResolvedValue(undefined);
     mocks.rollbackConfiguration.mockResolvedValue({
       configured: false,
       configPath: "/test/.codex/config.toml",
@@ -268,5 +284,27 @@ describe("RemoteControlPage", () => {
       expect(screen.getByText("登录后自动完成 Codex 配置")).toBeInTheDocument();
       expect(screen.queryByText("移动端配对码")).not.toBeInTheDocument();
     });
+  });
+
+  it("uploads a redacted diagnostic bundle and exposes its temporary link", async () => {
+    mocks.accountStatus.mockResolvedValue({
+      status: "ok",
+      authenticated: true,
+      user: { id: 7, username: "hang" },
+    });
+    render(<RemoteControlPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "上传诊断包" }));
+
+    await waitFor(() =>
+      expect(mocks.uploadDiagnosticBundle).toHaveBeenCalledOnce(),
+    );
+    expect(mocks.copyText).toHaveBeenCalledWith(
+      "https://diagnostics.example/bundle.zip?signature=test",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "打开链接" }));
+    expect(mocks.openExternal).toHaveBeenCalledWith(
+      "https://diagnostics.example/bundle.zip?signature=test",
+    );
   });
 });

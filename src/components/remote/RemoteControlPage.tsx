@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import {
   Check,
+  Copy,
+  ExternalLink,
   Link2,
   LogOut,
   Play,
@@ -9,6 +11,7 @@ import {
   RefreshCw,
   ShieldCheck,
   Sparkles,
+  UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
 import { remoteApi, type CodexPlusPlusStatus } from "@/lib/api/remote";
@@ -21,6 +24,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { extractErrorMessage } from "@/utils/errorUtils";
+import { copyText } from "@/lib/clipboard";
+import { settingsApi } from "@/lib/api/settings";
 
 type BridgeState = "idle" | "starting" | "waiting" | "connected" | "error";
 
@@ -29,6 +34,8 @@ export function RemoteControlPage() {
   const [accountLoaded, setAccountLoaded] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [configurationBusy, setConfigurationBusy] = useState(false);
+  const [diagnosticBusy, setDiagnosticBusy] = useState(false);
+  const [diagnosticUrl, setDiagnosticUrl] = useState<string | null>(null);
   const [state, setState] = useState<BridgeState>("idle");
   const [configurationReady, setConfigurationReady] = useState(false);
   const [canRollback, setCanRollback] = useState(false);
@@ -193,6 +200,20 @@ export function RemoteControlPage() {
     }
   };
 
+  const uploadDiagnostics = async () => {
+    setDiagnosticBusy(true);
+    try {
+      const result = await remoteApi.uploadDiagnosticBundle();
+      setDiagnosticUrl(result.url);
+      await copyText(result.url);
+      toast.success("诊断包已上传，7 天有效链接已复制");
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || "诊断包上传失败");
+    } finally {
+      setDiagnosticBusy(false);
+    }
+  };
+
   if (!accountLoaded) {
     return (
       <div className="px-6 py-8 text-sm text-muted-foreground">
@@ -354,6 +375,52 @@ export function RemoteControlPage() {
               {state === "starting" ? "正在启用" : "启用手机远程"}
             </Button>
           )}
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">问题排查</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <div>
+            <div className="font-medium">一键上传诊断包</div>
+            <div className="mt-1 text-xs leading-5 text-muted-foreground">
+              仅上传脱敏后的 Codex 配置、模型目录和日志尾部，不包含账号会话、API
+              Key、数据库或对话记录。链接 7 天有效，任何拿到链接的人均可访问。
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => void uploadDiagnostics()}
+              disabled={diagnosticBusy}
+            >
+              <UploadCloud className="mr-2 h-4 w-4" />
+              {diagnosticBusy ? "正在脱敏并上传" : "上传诊断包"}
+            </Button>
+            {diagnosticUrl ? (
+              <>
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    void copyText(diagnosticUrl).then(() =>
+                      toast.success("诊断链接已复制"),
+                    )
+                  }
+                >
+                  <Copy className="mr-2 h-4 w-4" />
+                  复制链接
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => void settingsApi.openExternal(diagnosticUrl)}
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  打开链接
+                </Button>
+              </>
+            ) : null}
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -14,6 +14,7 @@ mod commands;
 mod config;
 mod database;
 mod deeplink;
+mod diagnostic_bundle;
 mod error;
 mod gemini_config;
 mod gemini_mcp;
@@ -1369,6 +1370,7 @@ pub fn run() {
             commands::get_clawkit_codex_configuration_status,
             commands::configure_clawkit_codex,
             commands::rollback_clawkit_codex_configuration,
+            commands::upload_clawkit_diagnostic_bundle,
             commands::get_clawkit_account_status,
             commands::login_clawkit_account,
             commands::logout_clawkit_account,
