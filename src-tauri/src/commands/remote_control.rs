@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 struct ServerProcess {
     child: Child,
@@ -98,15 +98,23 @@ pub fn get_clawkit_codex_configuration_status(
 
 #[tauri::command]
 pub async fn configure_clawkit_codex(
+    app: AppHandle,
 ) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
     let gateway = crate::clawkit_gateway::bootstrap().await?;
-    crate::clawkit_codex_config::apply(&gateway)
+    let state = app
+        .try_state::<crate::store::AppState>()
+        .ok_or_else(|| "应用状态不可用".to_string())?;
+    crate::clawkit_codex_config::apply(&gateway, state.inner()).await
 }
 
 #[tauri::command]
-pub fn rollback_clawkit_codex_configuration(
+pub async fn rollback_clawkit_codex_configuration(
+    app: AppHandle,
 ) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
-    crate::clawkit_codex_config::rollback()
+    let state = app
+        .try_state::<crate::store::AppState>()
+        .ok_or_else(|| "应用状态不可用".to_string())?;
+    crate::clawkit_codex_config::rollback(state.inner()).await
 }
 
 #[tauri::command]

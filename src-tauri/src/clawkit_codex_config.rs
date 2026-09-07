@@ -3,6 +3,12 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 use toml_edit::{DocumentMut, Item, Table};
 
+#[path = "clawkit_codex_config_state.rs"]
+mod state;
+
+use state::BackupCcSwitchState;
+pub use state::{apply, rollback};
+
 const PROVIDER_ID: &str = "clawkit";
 const MODEL_CATALOG_FILE: &str = "clawkit-models.json";
 const BACKUP_MANIFEST_FILE: &str = "manifest.json";
@@ -29,6 +35,8 @@ pub struct ClawkitCodexConfigurationStatus {
 struct BackupManifest {
     config_existed: bool,
     catalog_existed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cc_switch_state: Option<BackupCcSwitchState>,
 }
 
 #[derive(Clone)]
@@ -64,17 +72,18 @@ pub fn status() -> ClawkitCodexConfigurationStatus {
     status_from_home(&crate::codex_config::get_codex_config_dir())
 }
 
-pub fn apply(
-    gateway: &crate::clawkit_gateway::GatewayBootstrap,
-) -> Result<ClawkitCodexConfigurationStatus, String> {
-    let home = crate::codex_config::get_codex_config_dir();
-    apply_at_home(gateway, &home)
-}
-
 fn apply_at_home(
     gateway: &crate::clawkit_gateway::GatewayBootstrap,
     home: &Path,
 ) -> Result<ClawkitCodexConfigurationStatus, String> {
+    apply_at_home_with_state(gateway, home, None).map(|(status, _)| status)
+}
+
+fn apply_at_home_with_state(
+    gateway: &crate::clawkit_gateway::GatewayBootstrap,
+    home: &Path,
+    cc_switch_state: Option<BackupCcSwitchState>,
+) -> Result<(ClawkitCodexConfigurationStatus, PathBuf), String> {
     let config_path = home.join("config.toml");
     let catalog_path = home.join(MODEL_CATALOG_FILE);
     let config_snapshot = FileSnapshot::capture(config_path.clone())?;
@@ -93,7 +102,7 @@ fn apply_at_home(
         &gateway.api_key,
         default_model,
     )?;
-    let backup_dir = create_backup(home, &config_snapshot, &catalog_snapshot)?;
+    let backup_dir = create_backup(home, &config_snapshot, &catalog_snapshot, cc_switch_state)?;
 
     let write_result = (|| {
         crate::clawkit_gateway::write_model_catalog_at(&gateway.models, catalog_path.clone())?;
@@ -115,15 +124,18 @@ fn apply_at_home(
         return Err(error);
     }
 
-    Ok(ClawkitCodexConfigurationStatus {
-        configured: true,
-        model: Some(default_model.to_string()),
-        models: gateway.models.clone(),
-        config_path: config_path.to_string_lossy().to_string(),
-        available_quota: Some(gateway.available_quota),
-        used_quota: Some(gateway.used_quota),
-        can_rollback: latest_backup_dir(home).is_some(),
-    })
+    Ok((
+        ClawkitCodexConfigurationStatus {
+            configured: true,
+            model: Some(default_model.to_string()),
+            models: gateway.models.clone(),
+            config_path: config_path.to_string_lossy().to_string(),
+            available_quota: Some(gateway.available_quota),
+            used_quota: Some(gateway.used_quota),
+            can_rollback: latest_backup_dir(home).is_some(),
+        },
+        backup_dir,
+    ))
 }
 
 fn write_config_at(path: &Path, contents: &str) -> Result<(), String> {
@@ -136,19 +148,24 @@ fn write_config_at(path: &Path, contents: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-pub fn rollback() -> Result<ClawkitCodexConfigurationStatus, String> {
-    let home = crate::codex_config::get_codex_config_dir();
-    rollback_at_home(&home)
-}
-
 fn rollback_at_home(home: &Path) -> Result<ClawkitCodexConfigurationStatus, String> {
     let backup_dir =
         latest_backup_dir(home).ok_or_else(|| "没有可恢复的 Codex 配置备份".to_string())?;
-    let manifest: BackupManifest = serde_json::from_slice(
+    restore_backup_files(home, &backup_dir)?;
+    remove_backup_dir(&backup_dir)?;
+    Ok(status_from_home(home))
+}
+
+fn read_backup_manifest(backup_dir: &Path) -> Result<BackupManifest, String> {
+    serde_json::from_slice(
         &std::fs::read(backup_dir.join(BACKUP_MANIFEST_FILE))
             .map_err(|error| format!("读取 Codex 配置备份失败：{error}"))?,
     )
-    .map_err(|error| format!("Codex 配置备份清单无效：{error}"))?;
+    .map_err(|error| format!("Codex 配置备份清单无效：{error}"))
+}
+
+fn restore_backup_files(home: &Path, backup_dir: &Path) -> Result<(), String> {
+    let manifest = read_backup_manifest(backup_dir)?;
     restore_backup_file(
         &backup_dir.join("config.toml"),
         &home.join("config.toml"),
@@ -159,15 +176,20 @@ fn rollback_at_home(home: &Path) -> Result<ClawkitCodexConfigurationStatus, Stri
         &home.join(MODEL_CATALOG_FILE),
         manifest.catalog_existed,
     )?;
-    std::fs::remove_dir_all(&backup_dir)
+    Ok(())
+}
+
+fn remove_backup_dir(backup_dir: &Path) -> Result<(), String> {
+    std::fs::remove_dir_all(backup_dir)
         .map_err(|error| format!("清理已恢复的 Codex 配置备份失败：{error}"))?;
-    Ok(status_from_home(home))
+    Ok(())
 }
 
 fn create_backup(
     home: &Path,
     config: &FileSnapshot,
     catalog: &FileSnapshot,
+    cc_switch_state: Option<BackupCcSwitchState>,
 ) -> Result<PathBuf, String> {
     let root = backup_root(home);
     std::fs::create_dir_all(&root)
@@ -190,6 +212,7 @@ fn create_backup(
     let manifest = serde_json::to_vec_pretty(&BackupManifest {
         config_existed: config.contents.is_some(),
         catalog_existed: catalog.contents.is_some(),
+        cc_switch_state,
     })
     .map_err(|error| error.to_string())?;
     crate::config::atomic_write_private(&backup_dir.join(BACKUP_MANIFEST_FILE), &manifest)
