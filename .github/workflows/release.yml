@@ -153,17 +153,46 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
+      - name: Detect Apple release credentials
+        if: runner.os == 'macOS'
+        id: apple-signing
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [ -n "$APPLE_CERTIFICATE" ] \
+            && [ -n "$APPLE_CERTIFICATE_PASSWORD" ] \
+            && [ -n "$KEYCHAIN_PASSWORD" ] \
+            && [ -n "$APPLE_ID" ] \
+            && [ -n "$APPLE_PASSWORD" ] \
+            && [ -n "$APPLE_TEAM_ID" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "Apple Developer ID signing and notarization are enabled"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "Apple release credentials are incomplete; macOS will use ad-hoc signing without notarization"
+          fi
+
       - name: Prepare Tauri signing key
         shell: bash
+        env:
+          RAW_TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # 调试：检查 Secret 是否存在
-          if [ -z "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" ]; then
+          set -euo pipefail
+          if [ -z "$RAW_TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "❌ TAURI_SIGNING_PRIVATE_KEY Secret 为空或不存在" >&2
             echo "请检查 GitHub 仓库 Settings > Secrets and variables > Actions" >&2
             exit 1
           fi
-          
-          RAW="${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}"
+
+          RAW="$RAW_TAURI_SIGNING_PRIVATE_KEY"
           # 目标：提供正确的私钥“文件路径”给 Tauri CLI，避免内容解码歧义
           KEY_PATH="$RUNNER_TEMP/tauri_signing.key"
           # 情况 1：原始两行文本（第一行以 "untrusted comment:" 开头）
@@ -184,7 +213,6 @@ jobs:
                 echo "✅ 使用一行 Base64 私钥，已构造两行文件"
               else
                 echo "❌ TAURI_SIGNING_PRIVATE_KEY 格式无法识别：既不是两行原文，也不是其 base64，亦非一行 base64" >&2
-                echo "密钥前10个字符: $(echo "$RAW" | head -c 10)..." >&2
                 exit 1
               fi
             fi
@@ -203,14 +231,17 @@ jobs:
             echo "❌ 无法生成私钥 base64 内容" >&2
             exit 1
           fi
+          echo "::add-mask::$KEY_B64"
           echo "TAURI_SIGNING_PRIVATE_KEY=$KEY_B64" >> "$GITHUB_ENV"
-          if [ -n "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" ]; then
-            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> $GITHUB_ENV
+          if [ -n "$RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "::add-mask::$RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+            echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=$RAW_TAURI_SIGNING_PRIVATE_KEY_PASSWORD" >> "$GITHUB_ENV"
           fi
+          rm -f "$KEY_PATH"
           echo "✅ Tauri signing key prepared"
 
       - name: Import Apple signing certificate
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple-signing.outputs.available == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -256,27 +287,40 @@ jobs:
         shell: bash
         timeout-minutes: 60
         env:
+          APPLE_SIGNING_AVAILABLE: ${{ steps.apple-signing.outputs.available }}
           APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
-          max_attempts=3
+          if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
+            max_attempts=3
+            build_label="signed and notarized"
+          else
+            max_attempts=1
+            build_label="ad-hoc signed (not notarized)"
+          fi
           for attempt in $(seq 1 "$max_attempts"); do
-            echo "=== macOS build/notarization attempt ${attempt}/${max_attempts} ==="
-            if pnpm tauri build --target universal-apple-darwin; then
-              echo "✅ macOS build/notarization succeeded"
+            echo "=== macOS ${build_label} build attempt ${attempt}/${max_attempts} ==="
+            if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
+              pnpm tauri build --target universal-apple-darwin && build_succeeded=true || build_succeeded=false
+            else
+              APPLE_SIGNING_IDENTITY="-" pnpm tauri build --target universal-apple-darwin \
+                && build_succeeded=true || build_succeeded=false
+            fi
+            if [ "$build_succeeded" = "true" ]; then
+              echo "✅ macOS ${build_label} build succeeded"
               exit 0
             fi
 
             if [ "$attempt" -eq "$max_attempts" ]; then
-              echo "❌ macOS build/notarization failed after ${max_attempts} attempts" >&2
+              echo "❌ macOS ${build_label} build failed after ${max_attempts} attempts" >&2
               exit 1
             fi
 
             sleep_seconds=$((attempt * 60))
-            echo "⚠️ macOS build/notarization failed, retrying in ${sleep_seconds}s..."
+            echo "⚠️ macOS ${build_label} build failed, retrying in ${sleep_seconds}s..."
             sleep "$sleep_seconds"
           done
 
@@ -300,6 +344,8 @@ jobs:
       - name: Prepare macOS Assets
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          APPLE_SIGNING_AVAILABLE: ${{ steps.apple-signing.outputs.available }}
         run: |
           set -euxo pipefail
           mkdir -p release-assets
@@ -327,9 +373,13 @@ jobs:
             exit 1
           fi
 
-          # Staple notarization ticket to .app (Tauri already notarized it)
-          xcrun stapler staple "$APP_PATH"
-          echo "✅ .app stapled"
+          if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
+            # Tauri notarizes the app during the signed build; staple its ticket.
+            xcrun stapler staple "$APP_PATH"
+            echo "✅ .app stapled"
+          else
+            echo "ℹ️ Skipping app stapling for ad-hoc macOS build"
+          fi
 
           # 1) Collect .tar.gz (updater artifact)
           NEW_TAR_GZ="CC-Switch-${VERSION}-macOS.tar.gz"
@@ -343,8 +393,8 @@ jobs:
           echo "macOS zip ready: $NEW_ZIP"
 
           # 3) Create styled DMG with create-dmg (Tauri's built-in DMG styling doesn't work on CI)
-          if [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
-            echo "❌ APPLE_SIGNING_IDENTITY is missing before DMG creation" >&2
+          if [ "$APPLE_SIGNING_AVAILABLE" = "true" ] && [ -z "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            echo "❌ APPLE_SIGNING_IDENTITY is missing before signed DMG creation" >&2
             exit 1
           fi
 
@@ -355,25 +405,34 @@ jobs:
           mkdir -p "$DMG_STAGE_DIR"
           ditto "$APP_PATH" "$DMG_STAGE_DIR/CC Switch.app"
 
-          create-dmg \
-            --volname "CC Switch" \
-            --background "src-tauri/icons/dmg-background.png" \
-            --window-size 660 400 \
-            --window-pos 200 120 \
-            --icon-size 80 \
-            --icon "CC Switch.app" 180 220 \
-            --hide-extension "CC Switch.app" \
-            --app-drop-link 480 220 \
-            --codesign "$APPLE_SIGNING_IDENTITY" \
-            --no-internet-enable \
+          create_dmg_args=(
+            --volname "CC Switch"
+            --background "src-tauri/icons/dmg-background.png"
+            --window-size 660 400
+            --window-pos 200 120
+            --icon-size 80
+            --icon "CC Switch.app" 180 220
+            --hide-extension "CC Switch.app"
+            --app-drop-link 480 220
+            --no-internet-enable
+          )
+          if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
+            create_dmg_args+=(--codesign "$APPLE_SIGNING_IDENTITY")
+          fi
+          create-dmg "${create_dmg_args[@]}" \
             "release-assets/$NEW_DMG" \
             "$DMG_STAGE_DIR"
+
+          if [ "$APPLE_SIGNING_AVAILABLE" != "true" ]; then
+            codesign --force --sign - "release-assets/$NEW_DMG"
+            echo "✅ DMG ad-hoc signed"
+          fi
 
           rm -rf "$DMG_STAGE_DIR"
           echo "✅ Styled DMG created: $NEW_DMG"
 
       - name: Notarize macOS DMG
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && steps.apple-signing.outputs.available == 'true'
         shell: bash
         timeout-minutes: 30
         env:
@@ -417,6 +476,8 @@ jobs:
       - name: Verify macOS code signing and notarization
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          APPLE_SIGNING_AVAILABLE: ${{ steps.apple-signing.outputs.available }}
         run: |
           set -euo pipefail
 
@@ -439,10 +500,15 @@ jobs:
           echo "=== Verifying .app: $APP_PATH ==="
           codesign --verify --deep --strict --verbose=2 "$APP_PATH"
           echo "✅ codesign verification passed"
-          spctl -a -t exec -vv "$APP_PATH"
-          echo "✅ spctl assessment passed"
-          xcrun stapler validate "$APP_PATH"
-          echo "✅ .app stapler validation passed"
+          if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
+            spctl -a -t exec -vv "$APP_PATH"
+            echo "✅ spctl assessment passed"
+            xcrun stapler validate "$APP_PATH"
+            echo "✅ .app stapler validation passed"
+          else
+            codesign -dv --verbose=4 "$APP_PATH" 2>&1 | grep -q 'Signature=adhoc'
+            echo "✅ .app ad-hoc signature confirmed (not notarized)"
+          fi
 
           # Verify .dmg (from release-assets/, created by create-dmg + notarized)
           DMG_PATH=$(find release-assets -maxdepth 1 -name "*.dmg" -type f | head -1 || true)
@@ -450,10 +516,15 @@ jobs:
             echo "=== Verifying .dmg: $DMG_PATH ==="
             codesign --verify --verbose=2 "$DMG_PATH"
             echo "✅ .dmg codesign verification passed"
-            spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
-            echo "✅ .dmg spctl assessment passed"
-            xcrun stapler validate "$DMG_PATH"
-            echo "✅ .dmg stapler validation passed"
+            if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
+              spctl -a -t open --context context:primary-signature -vv "$DMG_PATH"
+              echo "✅ .dmg spctl assessment passed"
+              xcrun stapler validate "$DMG_PATH"
+              echo "✅ .dmg stapler validation passed"
+            else
+              codesign -dv --verbose=4 "$DMG_PATH" 2>&1 | grep -q 'Signature=adhoc'
+              echo "✅ .dmg ad-hoc signature confirmed (not notarized)"
+            fi
           else
             echo "❌ No .dmg found for verification — release would ship without verified DMG" >&2
             exit 1
@@ -651,7 +722,7 @@ jobs:
             > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
 
             ---
-            macOS 版本已通过 Apple 代码签名和公证，可直接安装使用。
+            > 当前 fork 未配置 Apple Developer ID 凭据时，macOS 包使用 ad-hoc 签名且未公证，首次打开可能出现 Gatekeeper 提示；配置完整 Apple 凭据的发布仍会执行 Developer ID 签名和公证。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
