@@ -4,6 +4,10 @@ use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use crate::clawkit_account::transport::{
+    http_client_builder, post_json_with_bearer_direct_fallback,
+};
+
 const DEFAULT_GATEWAY_API_BASE: &str = "https://api.clawkit.chat";
 
 #[derive(Debug, Clone)]
@@ -47,18 +51,22 @@ pub async fn bootstrap() -> Result<GatewayBootstrap, String> {
     let api_base = normalize_api_base(&api_base)?;
     let (account_token, device_id) =
         crate::clawkit_account::ClawkitAccountClient::default().active_credentials()?;
-    let response = reqwest::Client::builder()
-        .user_agent(format!("ClawKit-Desktop/{}", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(std::time::Duration::from_secs(8))
-        .timeout(std::time::Duration::from_secs(20))
+    let client = http_client_builder()
         .build()
-        .map_err(|error| error.to_string())?
-        .post(format!("{api_base}/api/user/clawkit/codex/bootstrap"))
-        .bearer_auth(account_token)
-        .json(&json!({ "device_id": device_id }))
-        .send()
-        .await
-        .map_err(|_| "无法连接 ClawKit API 代理".to_string())?;
+        .map_err(|error| error.to_string())?;
+    let direct_client = http_client_builder()
+        .no_proxy()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let endpoint = format!("{api_base}/api/user/clawkit/codex/bootstrap");
+    let response = post_json_with_bearer_direct_fallback(
+        &client,
+        &direct_client,
+        &endpoint,
+        &account_token,
+        &json!({ "device_id": device_id }),
+    )
+    .await?;
     let status = response.status();
     let envelope = response
         .json::<BootstrapEnvelope>()

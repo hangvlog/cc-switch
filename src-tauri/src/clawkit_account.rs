@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-mod transport;
+pub(crate) mod transport;
 
 use transport::{http_client_builder, post_json_with_direct_fallback};
 
