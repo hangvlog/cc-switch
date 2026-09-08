@@ -316,12 +316,6 @@ fn managed_config_text(
     doc["model_provider"] = toml_edit::value(PROVIDER_ID);
     doc["model"] = toml_edit::value(default_model);
     doc["model_catalog_json"] = toml_edit::value(MODEL_CATALOG_FILE);
-    // ClawKit currently bridges Responses requests to an upstream Chat
-    // Completions endpoint that rejects Codex's hosted web_search tool. The
-    // model catalog flag is descriptive only; this top-level setting is what
-    // prevents Codex from adding web_search to requests at runtime.
-    doc[crate::codex_config::CODEX_WEB_SEARCH_FIELD] =
-        toml_edit::value(crate::codex_config::CODEX_WEB_SEARCH_DISABLED);
     if doc
         .get("model_providers")
         .and_then(Item::as_table)

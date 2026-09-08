@@ -22,13 +22,13 @@ command = "example"
     assert!(updated.contains("approval_policy = \"on-request\""));
     assert!(updated.contains("[mcp_servers.keep_me]"));
     assert!(updated.contains("model_provider = \"clawkit\""));
-    assert!(updated.contains("web_search = \"disabled\""));
+    assert!(!updated.contains("web_search"));
     assert!(updated.contains("base_url = \"https://api.clawkit.chat/v1\""));
     assert!(updated.contains("experimental_bearer_token = \"sk-private\""));
 }
 
 #[test]
-fn configuration_disables_web_search_for_clawkit_gateway() {
+fn configuration_preserves_the_users_web_search_preference() {
     let updated = managed_config_text(
         "web_search = \"live\"\n",
         "https://api.clawkit.chat/v1",
@@ -40,7 +40,7 @@ fn configuration_disables_web_search_for_clawkit_gateway() {
     assert_eq!(
         doc.get(crate::codex_config::CODEX_WEB_SEARCH_FIELD)
             .and_then(Item::as_str),
-        Some(crate::codex_config::CODEX_WEB_SEARCH_DISABLED)
+        Some("live")
     );
 }
 

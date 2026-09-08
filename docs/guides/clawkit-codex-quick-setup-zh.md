@@ -28,9 +28,8 @@
 - 不修改官方 Codex 的应用图标、桌面快捷方式或名称。
 - ClawKit 凭据存放在 `config.toml` 的专属 `[model_providers.clawkit]` 配置中，
   不进入渲染层、命令行参数或官方 `auth.json`。
-- ClawKit 网关当前通过 Chat Completions 上游提供模型能力，因此一键配置会沿用
-  CC Switch 的兼容开关写入顶层 `web_search = "disabled"`，避免 Codex 默认携带
-  上游不支持的托管搜索参数；恢复配置时该字段会随整份备份一并还原。
+- ClawKit 网关对 Responses 请求使用原生 `/v1/responses` 直通；一键配置不会新增或覆盖
+  顶层 `web_search`，用户现有的搜索偏好会保留。
 - `.env` 不是 Codex 的配置文件；Gemini 等其他工具仍使用各自的配置机制。
 - 停止手机远程或退出 ClawKit 账号不会启动、重命名或替换官方 Codex 应用。
 
