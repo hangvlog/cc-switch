@@ -32,10 +32,6 @@ jobs:
           - os: windows-2022
           - os: windows-11-arm
             arch: arm64
-          - os: ubuntu-22.04
-          - os: ubuntu-22.04-arm
-            arch: arm64
-          - os: macos-14
 
     steps:
       - name: Checkout
@@ -718,16 +714,8 @@ jobs:
 
             ### 下载
 
-            - **macOS**: `CC-Switch-${{ env.RELEASE_TAG }}-macOS.dmg`（推荐）或 `CC-Switch-${{ env.RELEASE_TAG }}-macOS.zip`（解压即用）
             - **Windows (x86_64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Windows.msi`（安装版）或 `CC-Switch-${{ env.RELEASE_TAG }}-Windows-Portable.zip`（绿色版）
             - **Windows (ARM64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Windows-arm64.msi`（安装版）或 `CC-Switch-${{ env.RELEASE_TAG }}-Windows-arm64-Portable.zip`（绿色版）
-            - **Linux (x86_64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Linux-x86_64.AppImage` / `.deb` / `.rpm`
-            - **Linux (ARM64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Linux-arm64.AppImage` / `.deb` / `.rpm`
-
-            > `.tar.gz` 为 Tauri updater 自动更新专用，无需手动下载。
-
-            ---
-            > 当前 fork 未配置 Apple Developer ID 凭据时，macOS 包使用 ad-hoc 签名且未公证，首次打开可能出现 Gatekeeper 提示；配置完整 Apple 凭据的发布仍会执行 Developer ID 签名和公证。
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
