@@ -1,6 +1,6 @@
 use super::{
-    apply_at_home, managed_config_text, rollback_at_home, status_from_home, MODEL_CATALOG_FILE,
-    PROVIDER_ID,
+    apply_at_home, managed_config_text, resolve_model, rollback_at_home, status_from_home,
+    MODEL_CATALOG_FILE, PROVIDER_ID,
 };
 use crate::clawkit_gateway::GatewayBootstrap;
 use toml_edit::{DocumentMut, Item};
@@ -85,7 +85,7 @@ fn apply_preserves_auth_and_unrelated_config_then_rolls_back() {
         used_quota: 5,
     };
 
-    let applied = apply_at_home(&gateway, temp.path()).unwrap();
+    let applied = apply_at_home(&gateway, temp.path(), None).unwrap();
     assert!(applied.configured);
     assert!(applied.can_rollback);
     assert_eq!(std::fs::read(&auth_path).unwrap(), original_auth);
@@ -106,4 +106,43 @@ fn apply_preserves_auth_and_unrelated_config_then_rolls_back() {
     assert_eq!(std::fs::read(&auth_path).unwrap(), original_auth);
     assert_eq!(std::fs::read(&config_path).unwrap(), original_config);
     assert!(!temp.path().join(MODEL_CATALOG_FILE).exists());
+}
+
+#[test]
+fn apply_uses_an_allowed_selected_model() {
+    let temp = tempfile::tempdir().unwrap();
+    let gateway = GatewayBootstrap {
+        api_key: "sk-private".into(),
+        base_url: "https://gateway.test/v1".into(),
+        models: vec!["gpt-5.6-sol".into(), "gpt-5.6-terra".into()],
+        available_quota: 100,
+        used_quota: 5,
+    };
+
+    let applied = apply_at_home(&gateway, temp.path(), Some("gpt-5.6-terra")).unwrap();
+    assert_eq!(applied.model.as_deref(), Some("gpt-5.6-terra"));
+    let configured = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
+    assert!(configured.contains("model = \"gpt-5.6-terra\""));
+}
+
+#[test]
+fn apply_rejects_a_model_outside_the_account_allowlist() {
+    let temp = tempfile::tempdir().unwrap();
+    let gateway = GatewayBootstrap {
+        api_key: "sk-private".into(),
+        base_url: "https://gateway.test/v1".into(),
+        models: vec!["gpt-5.6-sol".into()],
+        available_quota: 100,
+        used_quota: 5,
+    };
+
+    let error = apply_at_home(&gateway, temp.path(), Some("unauthorized-model")).unwrap_err();
+    assert!(error.contains("不在当前账号"));
+    assert!(!temp.path().join("config.toml").exists());
+}
+
+#[test]
+fn empty_selection_keeps_the_preferred_sol_default() {
+    let models = vec!["gpt-5.6-terra".into(), "gpt-5.6-sol".into()];
+    assert_eq!(resolve_model(&models, None).unwrap(), "gpt-5.6-sol");
 }

@@ -24,6 +24,13 @@ pub struct ClawkitCodexConfigurationStatus {
     pub can_rollback: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClawkitCodexModelOptions {
+    pub default_model: String,
+    pub models: Vec<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BackupManifest {
@@ -66,14 +73,27 @@ pub fn status() -> ClawkitCodexConfigurationStatus {
 
 pub fn apply(
     gateway: &crate::clawkit_gateway::GatewayBootstrap,
+    selected_model: Option<&str>,
 ) -> Result<ClawkitCodexConfigurationStatus, String> {
     let home = crate::codex_config::get_codex_config_dir();
-    apply_at_home(gateway, &home)
+    apply_at_home(gateway, &home, selected_model)
+}
+
+pub fn model_options(
+    gateway: &crate::clawkit_gateway::GatewayBootstrap,
+) -> Result<ClawkitCodexModelOptions, String> {
+    let models = crate::clawkit_gateway::normalized_models(&gateway.models);
+    let default_model = resolve_model(&models, None)?.to_string();
+    Ok(ClawkitCodexModelOptions {
+        default_model,
+        models,
+    })
 }
 
 fn apply_at_home(
     gateway: &crate::clawkit_gateway::GatewayBootstrap,
     home: &Path,
+    selected_model: Option<&str>,
 ) -> Result<ClawkitCodexConfigurationStatus, String> {
     let config_path = home.join("config.toml");
     let catalog_path = home.join(MODEL_CATALOG_FILE);
@@ -85,8 +105,8 @@ fn apply_at_home(
         .map(String::from_utf8_lossy)
         .map(|value| value.into_owned())
         .unwrap_or_default();
-    let default_model = crate::clawkit_gateway::preferred_default_model(&gateway.models)
-        .ok_or_else(|| "当前账号没有可用的 API 模型".to_string())?;
+    let available_models = crate::clawkit_gateway::normalized_models(&gateway.models);
+    let default_model = resolve_model(&available_models, selected_model)?;
     let updated = managed_config_text(
         &existing,
         &gateway.base_url,
@@ -96,7 +116,7 @@ fn apply_at_home(
     let backup_dir = create_backup(home, &config_snapshot, &catalog_snapshot)?;
 
     let write_result = (|| {
-        crate::clawkit_gateway::write_model_catalog_at(&gateway.models, catalog_path.clone())?;
+        crate::clawkit_gateway::write_model_catalog_at(&available_models, catalog_path.clone())?;
         write_config_at(&config_path, &updated)
     })();
     if let Err(error) = write_result {
@@ -118,12 +138,31 @@ fn apply_at_home(
     Ok(ClawkitCodexConfigurationStatus {
         configured: true,
         model: Some(default_model.to_string()),
-        models: gateway.models.clone(),
+        models: available_models,
         config_path: config_path.to_string_lossy().to_string(),
         available_quota: Some(gateway.available_quota),
         used_quota: Some(gateway.used_quota),
         can_rollback: latest_backup_dir(home).is_some(),
     })
+}
+
+fn resolve_model<'a>(
+    models: &'a [String],
+    selected_model: Option<&str>,
+) -> Result<&'a str, String> {
+    if let Some(selected_model) = selected_model
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+    {
+        return models
+            .iter()
+            .find(|model| model.as_str() == selected_model)
+            .map(String::as_str)
+            .ok_or_else(|| "所选模型不在当前账号的可用模型中".to_string());
+    }
+
+    crate::clawkit_gateway::preferred_default_model(models)
+        .ok_or_else(|| "当前账号没有可用的 API 模型".to_string())
 }
 
 fn write_config_at(path: &Path, contents: &str) -> Result<(), String> {

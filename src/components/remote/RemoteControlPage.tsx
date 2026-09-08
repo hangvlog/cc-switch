@@ -5,12 +5,8 @@ import {
   Copy,
   ExternalLink,
   Link2,
-  LogOut,
   Play,
   Power,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
   UploadCloud,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -20,6 +16,7 @@ import {
   type RemoteAccountStatus,
 } from "@/lib/api/remoteAccount";
 import { AccountLoginCard } from "@/components/remote/AccountLoginCard";
+import { ClawkitConfigurationCard } from "@/components/remote/ClawkitConfigurationCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +35,10 @@ export function RemoteControlPage() {
   const [diagnosticUrl, setDiagnosticUrl] = useState<string | null>(null);
   const [state, setState] = useState<BridgeState>("idle");
   const [configurationReady, setConfigurationReady] = useState(false);
+  const [configuredModel, setConfiguredModel] = useState("");
+  const [selectedModel, setSelectedModel] = useState("");
+  const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
   const [canRollback, setCanRollback] = useState(false);
   const [remoteRunning, setRemoteRunning] = useState(false);
   const [peerOnline, setPeerOnline] = useState(false);
@@ -57,7 +58,21 @@ export function RemoteControlPage() {
   useEffect(() => {
     void remoteAccountApi
       .status()
-      .then((status) => setAccount(status.authenticated ? status : null))
+      .then((status) => {
+        setAccount(status.authenticated ? status : null);
+        if (!status.authenticated) return;
+        setModelsLoading(true);
+        void remoteApi
+          .modelOptions()
+          .then((options) => {
+            setAvailableModels(options.models);
+            setSelectedModel((current) =>
+              options.models.includes(current) ? current : options.defaultModel,
+            );
+          })
+          .catch(() => null)
+          .finally(() => setModelsLoading(false));
+      })
       .finally(() => setAccountLoaded(true));
     void remoteApi
       .codexPlusPlusStatus()
@@ -68,6 +83,9 @@ export function RemoteControlPage() {
       .then((status) => {
         setConfigurationReady(status.configured);
         setCanRollback(status.canRollback);
+        setConfiguredModel(status.model || "");
+        if (status.models?.length) setAvailableModels(status.models);
+        if (status.model) setSelectedModel(status.model);
       })
       .catch(() => null);
     void remoteApi
@@ -115,9 +133,14 @@ export function RemoteControlPage() {
       if (!targetAccount?.authenticated) return;
       setConfigurationBusy(true);
       try {
-        const status = await remoteApi.configure();
+        const status = selectedModel
+          ? await remoteApi.configure(selectedModel)
+          : await remoteApi.configure();
         setConfigurationReady(status.configured);
         setCanRollback(status.canRollback);
+        setConfiguredModel(status.model || "");
+        setSelectedModel(status.model || "");
+        setAvailableModels(status.models || []);
         toast.success("Codex 配置已完成，重启 Codex 后生效");
       } catch (error) {
         setConfigurationReady(false);
@@ -128,7 +151,7 @@ export function RemoteControlPage() {
         setConfigurationBusy(false);
       }
     },
-    [account],
+    [account, selectedModel],
   );
 
   const rollbackConfiguration = async () => {
@@ -137,6 +160,9 @@ export function RemoteControlPage() {
       const status = await remoteApi.rollbackConfiguration();
       setConfigurationReady(status.configured);
       setCanRollback(status.canRollback);
+      setConfiguredModel(status.model || "");
+      setSelectedModel(status.model || "");
+      setAvailableModels(status.models || []);
       toast.success("已恢复一键配置前的 Codex 配置");
     } catch (error) {
       toast.error(extractErrorMessage(error) || "恢复 Codex 配置失败");
@@ -230,82 +256,25 @@ export function RemoteControlPage() {
     );
   }
 
-  const statusLabel = configurationReady
-    ? "配置完成"
-    : configurationBusy
-      ? "正在配置"
-      : "尚未配置";
   const displayName =
     account.user?.nickname || account.user?.username || "ClawKit 用户";
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-8 pt-4">
-      <Card className="overflow-hidden border-primary/25 shadow-sm">
-        <div className="h-1 bg-gradient-to-r from-primary via-primary/60 to-transparent" />
-        <CardHeader className="flex-row items-center justify-between space-y-0">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
-              <Sparkles className="h-5 w-5" />
-            </div>
-            <div>
-              <CardTitle className="text-lg">一键配置 Codex</CardTitle>
-              <p className="mt-1 text-sm text-muted-foreground">
-                已登录 {displayName}；账号模型、API
-                网关和安全连接均由应用自动配置。
-              </p>
-            </div>
-          </div>
-          <Badge variant={configurationReady ? "default" : "secondary"}>
-            {statusLabel}
-          </Badge>
-        </CardHeader>
-        <CardContent className="space-y-5">
-          <div className="flex items-center justify-between rounded-md border px-3 py-3">
-            <div className="flex items-start gap-3">
-              <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
-              <div>
-                <div className="text-sm font-medium">零侵入配置</div>
-                <div className="text-xs text-muted-foreground">
-                  仅定向更新 Codex 用户配置和模型目录；保留 auth.json、MCP、
-                  Skills，不修改 Codex 应用、名称、图标或快捷方式。
-                </div>
-              </div>
-            </div>
-          </div>
-          <div className="flex justify-between gap-2">
-            <Button variant="ghost" onClick={() => void logout()}>
-              <LogOut className="mr-2 h-4 w-4" />
-              退出账号
-            </Button>
-            <div className="flex gap-2">
-              {canRollback ? (
-                <Button
-                  variant="outline"
-                  onClick={() => void rollbackConfiguration()}
-                  disabled={configurationBusy}
-                >
-                  恢复配置
-                </Button>
-              ) : null}
-              <Button
-                onClick={() => void configure()}
-                disabled={configurationBusy}
-              >
-                {configurationReady ? (
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                ) : (
-                  <Link2 className="mr-2 h-4 w-4" />
-                )}
-                {configurationBusy
-                  ? "正在配置"
-                  : configurationReady
-                    ? "重新配置"
-                    : "立即一键配置"}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+      <ClawkitConfigurationCard
+        displayName={displayName}
+        configured={configurationReady}
+        configuredModel={configuredModel}
+        selectedModel={selectedModel}
+        models={availableModels}
+        busy={configurationBusy}
+        modelsLoading={modelsLoading}
+        canRollback={canRollback}
+        onModelChange={setSelectedModel}
+        onConfigure={() => void configure()}
+        onRollback={() => void rollbackConfiguration()}
+        onLogout={() => void logout()}
+      />
       <Card
         className={
           configurationReady

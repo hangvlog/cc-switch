@@ -6,11 +6,13 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 
 const mocks = vi.hoisted(() => ({
   listen: vi.fn(),
   unlisten: vi.fn(),
   configurationStatus: vi.fn(),
+  modelOptions: vi.fn(),
   configure: vi.fn(),
   uploadDiagnosticBundle: vi.fn(),
   rollbackConfiguration: vi.fn(),
@@ -35,6 +37,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: mocks.listen }));
 vi.mock("@/lib/api/remote", () => ({
   remoteApi: {
     configurationStatus: mocks.configurationStatus,
+    modelOptions: mocks.modelOptions,
     configure: mocks.configure,
     uploadDiagnosticBundle: mocks.uploadDiagnosticBundle,
     rollbackConfiguration: mocks.rollbackConfiguration,
@@ -113,6 +116,10 @@ async function login() {
 describe("RemoteControlPage", () => {
   beforeEach(() => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: vi.fn(),
+    });
     FakeWebSocket.instances = [];
     mocks.listen.mockResolvedValue(mocks.unlisten);
     mocks.configurationStatus.mockResolvedValue({
@@ -123,9 +130,13 @@ describe("RemoteControlPage", () => {
     mocks.configure.mockResolvedValue({
       configured: true,
       model: "gpt-5.6-sol",
-      models: ["gpt-5.6-sol"],
+      models: ["gpt-5.6-sol", "gpt-5.6-terra"],
       configPath: "/test/.codex/config.toml",
       canRollback: true,
+    });
+    mocks.modelOptions.mockResolvedValue({
+      defaultModel: "gpt-5.6-sol",
+      models: ["gpt-5.6-sol", "gpt-5.6-terra"],
     });
     mocks.uploadDiagnosticBundle.mockResolvedValue({
       bundleId: "bundle-1",
@@ -228,6 +239,28 @@ describe("RemoteControlPage", () => {
     expect(mocks.startRemote).not.toHaveBeenCalled();
     expect(mocks.socketTicket).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
+  });
+
+  it("defaults to sol and applies a different account model from the selector", async () => {
+    mocks.accountStatus.mockResolvedValue({
+      status: "ok",
+      authenticated: true,
+      user: { id: 7, username: "hang" },
+    });
+    const user = userEvent.setup();
+    render(<RemoteControlPage />);
+
+    const selector = await screen.findByRole("combobox", { name: "默认模型" });
+    await waitFor(() => expect(selector).toHaveTextContent("gpt-5.6-sol"));
+    await user.click(selector);
+    await user.click(
+      await screen.findByRole("option", { name: "gpt-5.6-terra" }),
+    );
+    await user.click(screen.getByRole("button", { name: "立即一键配置" }));
+
+    await waitFor(() =>
+      expect(mocks.configure).toHaveBeenCalledWith("gpt-5.6-terra"),
+    );
   });
 
   it("checks the bundled helper without launching Codex", async () => {

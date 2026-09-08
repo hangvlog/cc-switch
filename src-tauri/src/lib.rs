@@ -1368,6 +1368,7 @@ pub fn run() {
             commands::get_providers,
             commands::get_codex_remote_status,
             commands::get_clawkit_codex_configuration_status,
+            commands::get_clawkit_codex_model_options,
             commands::configure_clawkit_codex,
             commands::rollback_clawkit_codex_configuration,
             commands::upload_clawkit_diagnostic_bundle,

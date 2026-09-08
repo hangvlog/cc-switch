@@ -18,6 +18,11 @@ export interface ClawkitCodexConfigurationStatus {
   canRollback: boolean;
 }
 
+export interface ClawkitCodexModelOptions {
+  defaultModel: string;
+  models: string[];
+}
+
 export interface CodexPlusPlusStatus {
   installed: boolean;
   summary: string;
@@ -35,8 +40,12 @@ export const remoteApi = {
     invoke<ClawkitCodexConfigurationStatus>(
       "get_clawkit_codex_configuration_status",
     ),
-  configure: () =>
-    invoke<ClawkitCodexConfigurationStatus>("configure_clawkit_codex"),
+  modelOptions: () =>
+    invoke<ClawkitCodexModelOptions>("get_clawkit_codex_model_options"),
+  configure: (selectedModel?: string) =>
+    invoke<ClawkitCodexConfigurationStatus>("configure_clawkit_codex", {
+      selectedModel: selectedModel || null,
+    }),
   uploadDiagnosticBundle: () =>
     invoke<DiagnosticBundleUpload>("upload_clawkit_diagnostic_bundle"),
   rollbackConfiguration: () =>

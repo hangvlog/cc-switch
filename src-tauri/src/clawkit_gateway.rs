@@ -90,14 +90,8 @@ pub async fn bootstrap() -> Result<GatewayBootstrap, String> {
 }
 
 pub(crate) fn write_model_catalog_at(models: &[String], path: PathBuf) -> Result<PathBuf, String> {
-    let mut unique = models
-        .iter()
-        .map(|model| model.trim())
-        .filter(|model| !model.is_empty())
-        .map(str::to_string)
-        .collect::<Vec<_>>();
+    let mut unique = normalized_models(models);
     unique.sort();
-    unique.dedup();
     if unique.is_empty() {
         return Err("当前账号没有可用的 API 模型".to_string());
     }
@@ -123,6 +117,16 @@ pub(crate) fn write_model_catalog_at(models: &[String], path: PathBuf) -> Result
         .map_err(|error| error.to_string())?;
     crate::config::atomic_write(&path, &contents).map_err(|error| error.to_string())?;
     Ok(path)
+}
+
+pub fn normalized_models(models: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    for model in models.iter().map(|model| model.trim()) {
+        if !model.is_empty() && !normalized.iter().any(|current| current == model) {
+            normalized.push(model.to_string());
+        }
+    }
+    normalized
 }
 
 pub fn preferred_default_model(models: &[String]) -> Option<&str> {
