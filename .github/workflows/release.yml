@@ -306,6 +306,11 @@ jobs:
             if [ "$APPLE_SIGNING_AVAILABLE" = "true" ]; then
               pnpm tauri build --target universal-apple-darwin && build_succeeded=true || build_succeeded=false
             else
+              # Empty Apple environment variables are still treated by Tauri as an
+              # attempted notarization configuration. Remove them entirely so the
+              # ad-hoc build stops after code signing instead of invoking notarytool.
+              unset APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+              unset APPLE_API_KEY APPLE_API_ISSUER APPLE_API_KEY_PATH
               APPLE_SIGNING_IDENTITY="-" pnpm tauri build --target universal-apple-darwin \
                 && build_succeeded=true || build_succeeded=false
             fi
