@@ -159,16 +159,12 @@ impl ClawkitAccountClient {
         if !status.is_success() || ticket.is_empty() {
             return Err(response_message(&body, status, "创建安全连接失败"));
         }
-        Ok(json!({
-            "status": "ok",
-            "websocket_url": format!(
-                "{}/api/codex-remote/account/ws?ticket={}",
-                websocket_base(&self.relay_api_base),
-                ticket
-            ),
-            "expires_at": body.get("expires_at").cloned().unwrap_or(Value::Null),
-            "device_id": session.device_id,
-        }))
+        Ok(socket_ticket_status(
+            &self.relay_api_base,
+            ticket,
+            body.get("expires_at").cloned().unwrap_or(Value::Null),
+            session.device_id,
+        ))
     }
 
     pub fn active_credentials(&self) -> Result<(String, String), String> {
@@ -270,8 +266,26 @@ fn session_status(session: &StoredSession) -> Value {
         "status": "ok",
         "authenticated": true,
         "user": session.user,
-        "device_id": session.device_id,
-        "expires_at": session.expires_at,
+        "deviceId": session.device_id,
+        "expiresAt": session.expires_at,
+    })
+}
+
+fn socket_ticket_status(
+    relay_api_base: &str,
+    ticket: &str,
+    expires_at: Value,
+    device_id: String,
+) -> Value {
+    json!({
+        "status": "ok",
+        "websocketUrl": format!(
+            "{}/api/codex-remote/account/ws?ticket={}",
+            websocket_base(relay_api_base),
+            ticket
+        ),
+        "expiresAt": expires_at,
+        "deviceId": device_id,
     })
 }
 
@@ -295,7 +309,11 @@ fn restrict_session_permissions(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_session_path, login_request, normalize_api_base, websocket_base};
+    use super::{
+        default_session_path, login_request, normalize_api_base, session_status,
+        socket_ticket_status, websocket_base, StoredSession,
+    };
+    use serde_json::json;
 
     #[test]
     fn production_endpoints_use_secure_schemes() {
@@ -339,5 +357,38 @@ mod tests {
         assert_eq!(endpoint, "https://image.clawkit.chat/auth/login");
         assert_eq!(payload["username"], "alice@example.com");
         assert!(payload.get("phone").is_none());
+    }
+
+    #[test]
+    fn tauri_account_status_uses_camel_case_keys() {
+        let status = session_status(&StoredSession {
+            token: "secret-value".into(),
+            user: json!({ "username": "alice" }),
+            device_id: "desktop-device".into(),
+            expires_at: 42,
+        });
+
+        assert_eq!(status["deviceId"], "desktop-device");
+        assert_eq!(status["expiresAt"], 42);
+        assert!(status.get("device_id").is_none());
+        assert!(status.get("expires_at").is_none());
+    }
+
+    #[test]
+    fn tauri_socket_ticket_uses_frontend_contract() {
+        let status = socket_ticket_status(
+            "https://clawkit.chat",
+            "one-time-ticket",
+            json!(84),
+            "desktop-device".into(),
+        );
+
+        assert_eq!(
+            status["websocketUrl"],
+            "wss://clawkit.chat/api/codex-remote/account/ws?ticket=one-time-ticket"
+        );
+        assert_eq!(status["expiresAt"], 84);
+        assert_eq!(status["deviceId"], "desktop-device");
+        assert!(status.get("websocket_url").is_none());
     }
 }

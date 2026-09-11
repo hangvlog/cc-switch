@@ -82,6 +82,9 @@ export function RemoteControlPage() {
     try {
       await remoteApi.start();
       const ticket = await remoteAccountApi.createSocketTicket();
+      if (!ticket.websocketUrl) {
+        throw new Error("远程服务返回的连接地址无效");
+      }
       await connectBridge(ticket.websocketUrl);
     } catch (error) {
       setState("error");
