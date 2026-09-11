@@ -17,7 +17,7 @@ pub(super) fn codex_command(binary: &Path) -> Command {
     Command::new(binary)
 }
 
-pub(super) fn find_codex_cli() -> Option<PathBuf> {
+pub(super) fn find_codex_cli(codex_home: Option<&Path>) -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os("CODEX_REMOTE_CODEX_BIN") {
         let path = PathBuf::from(explicit);
         if path.is_file() {
@@ -25,8 +25,9 @@ pub(super) fn find_codex_cli() -> Option<PathBuf> {
         }
     }
 
-    bundled_codex_cli_candidates()
+    configured_codex_cli_candidate(codex_home)
         .into_iter()
+        .chain(bundled_codex_cli_candidates())
         .chain(platform_codex_cli_candidates())
         .chain(codex_cli_candidates_on_path(std::env::var_os("PATH")))
         .find(|candidate| candidate.is_file())
@@ -39,6 +40,35 @@ pub(super) fn find_codex_cli() -> Option<PathBuf> {
                 .into_iter()
                 .find(|candidate| candidate.is_absolute() && candidate.is_file())
         })
+}
+
+fn configured_codex_cli_candidate(codex_home: Option<&Path>) -> Option<PathBuf> {
+    let config_path = codex_home
+        .map(|directory| directory.join("config.toml"))
+        .unwrap_or_else(crate::codex_config::get_codex_config_path);
+    let config = std::fs::read_to_string(config_path).ok()?;
+    let document = config.parse::<toml::Value>().ok()?;
+    let raw_path = document
+        .get("mcp_servers")?
+        .get("node_repl")?
+        .get("env")?
+        .get("CODEX_CLI_PATH")?
+        .as_str()?
+        .trim();
+    if raw_path.is_empty() {
+        return None;
+    }
+
+    let candidate = PathBuf::from(raw_path);
+    let expected_name = candidate.file_name()?;
+    if !candidate.is_absolute()
+        || !codex_binary_names()
+            .iter()
+            .any(|name| expected_name == std::ffi::OsStr::new(name))
+    {
+        return None;
+    }
+    candidate.is_file().then_some(candidate)
 }
 
 fn codex_binary_names() -> &'static [&'static str] {
@@ -75,6 +105,24 @@ fn codex_cli_candidates_on_path(path: Option<std::ffi::OsString>) -> Vec<PathBuf
         .collect()
 }
 
+fn append_versioned_codex_candidates(
+    candidates: &mut Vec<PathBuf>,
+    versions_root: &Path,
+    binary_name: &str,
+) {
+    let Ok(entries) = std::fs::read_dir(versions_root) else {
+        return;
+    };
+    let mut versioned = entries
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.path().join(binary_name))
+        .filter(|candidate| candidate.is_file())
+        .collect::<Vec<_>>();
+    versioned.sort_by(|left, right| right.cmp(left));
+    candidates.extend(versioned);
+}
+
 fn platform_codex_cli_candidates() -> Vec<PathBuf> {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     let mut candidates = Vec::new();
@@ -83,7 +131,12 @@ fn platform_codex_cli_candidates() -> Vec<PathBuf> {
     #[cfg(target_os = "macos")]
     {
         if let Some(home) = dirs::home_dir() {
-            for app in ["Codex.app", "OpenAI Codex.app", "OpenAI.Codex.app"] {
+            for app in [
+                "ChatGPT.app",
+                "Codex.app",
+                "OpenAI Codex.app",
+                "OpenAI.Codex.app",
+            ] {
                 candidates.push(
                     home.join("Applications")
                         .join(app)
@@ -91,7 +144,12 @@ fn platform_codex_cli_candidates() -> Vec<PathBuf> {
                 );
             }
         }
-        for app in ["Codex.app", "OpenAI Codex.app", "OpenAI.Codex.app"] {
+        for app in [
+            "ChatGPT.app",
+            "Codex.app",
+            "OpenAI Codex.app",
+            "OpenAI.Codex.app",
+        ] {
             candidates.push(
                 PathBuf::from("/Applications")
                     .join(app)
@@ -103,10 +161,14 @@ fn platform_codex_cli_candidates() -> Vec<PathBuf> {
     {
         if let Some(local) = std::env::var_os("LOCALAPPDATA") {
             let local = PathBuf::from(local);
+            let codex_root = local.join("OpenAI/Codex");
+            let codex_bin = codex_root.join("bin");
+            candidates.push(codex_bin.join("codex.exe"));
+            append_versioned_codex_candidates(&mut candidates, &codex_bin, "codex.exe");
             for root in [
-                local.join("OpenAI/Codex/bin"),
-                local.join("OpenAI/Codex"),
+                codex_root,
                 local.join("Programs/OpenAI/Codex"),
+                local.join("Programs/ChatGPT"),
             ] {
                 candidates.push(root.join("resources/codex.exe"));
                 candidates.push(root.join("Resources/codex.exe"));
@@ -131,7 +193,11 @@ fn append_windows_store_codex_candidates(candidates: &mut Vec<PathBuf>, root: &P
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-        if name.starts_with("openai.codex_") || name.starts_with("openai.codexbeta_") {
+        if name.starts_with("openai.codex_")
+            || name.starts_with("openai.codexbeta_")
+            || name.starts_with("openai.chatgpt_")
+            || name.starts_with("openai.chatgpt-desktop_")
+        {
             candidates.push(entry.path().join("app/resources/codex.exe"));
             candidates.push(entry.path().join("app/Resources/codex.exe"));
         }
@@ -140,7 +206,11 @@ fn append_windows_store_codex_candidates(candidates: &mut Vec<PathBuf>, root: &P
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled_codex_cli_candidates, codex_cli_candidates_on_path};
+    use super::{
+        append_versioned_codex_candidates, bundled_codex_cli_candidates,
+        codex_cli_candidates_on_path, configured_codex_cli_candidate,
+    };
+    use std::fs;
 
     #[test]
     fn bundled_candidates_stay_next_to_the_executable() {
@@ -173,5 +243,38 @@ mod tests {
         assert!(candidates
             .iter()
             .any(|item| item.starts_with(second.path())));
+    }
+
+    #[test]
+    fn reads_codex_desktop_cli_path_from_config() {
+        let codex_home = tempfile::tempdir().expect("create Codex home");
+        let binary = codex_home.path().join(super::codex_binary_names()[0]);
+        fs::write(&binary, b"stub").expect("create Codex CLI stub");
+        let encoded = serde_json::to_string(binary.to_str().expect("UTF-8 path"))
+            .expect("encode config path");
+        fs::write(
+            codex_home.path().join("config.toml"),
+            format!("[mcp_servers.node_repl.env]\nCODEX_CLI_PATH = {encoded}\n"),
+        )
+        .expect("write config");
+
+        assert_eq!(
+            configured_codex_cli_candidate(Some(codex_home.path())),
+            Some(binary)
+        );
+    }
+
+    #[test]
+    fn finds_codex_cli_in_versioned_desktop_bin_directory() {
+        let root = tempfile::tempdir().expect("create Codex bin root");
+        let binary = root.path().join("8e5b6932251c2c1c").join("codex.exe");
+        fs::create_dir_all(binary.parent().expect("binary parent"))
+            .expect("create version directory");
+        fs::write(&binary, b"stub").expect("create Codex CLI stub");
+
+        let mut candidates = Vec::new();
+        append_versioned_codex_candidates(&mut candidates, root.path(), "codex.exe");
+
+        assert_eq!(candidates, vec![binary]);
     }
 }

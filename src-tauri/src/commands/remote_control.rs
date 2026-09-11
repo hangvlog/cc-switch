@@ -146,7 +146,7 @@ pub async fn start_codex_remote_server(
         .clone()
         .ok_or_else(|| "Codex 配置缺少默认模型".to_string())?;
     let codex_home = validate_codex_home(codex_home_override)?;
-    let binary = super::remote_codex_cli::find_codex_cli().ok_or_else(|| {
+    let binary = super::remote_codex_cli::find_codex_cli(codex_home.as_deref()).ok_or_else(|| {
         "手机远程需要 Codex app-server，但未找到 Codex Desktop 内置 CLI 或全局 Codex CLI；一键配置和桌面端使用不受影响".to_string()
     })?;
     let mut command = super::remote_codex_cli::codex_command(&binary);

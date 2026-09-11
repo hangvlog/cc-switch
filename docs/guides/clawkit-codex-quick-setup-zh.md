@@ -25,6 +25,11 @@
 `app-server`。若桌面版未携带 `app-server` 且没有安装全局 Codex CLI，页面只提示手机
 远程暂不可用，不会回退已经成功的一键配置。
 
+启动手机远程时会优先复用 Codex Desktop 写入 `config.toml` 的 `CODEX_CLI_PATH`。Windows
+版 Codex Desktop 当前会把 CLI 放在 `%LOCALAPPDATA%\\OpenAI\\Codex\\bin\\<版本哈希>\\codex.exe`，
+桌面端也会扫描这一版本化目录；macOS 同时兼容 `ChatGPT.app` 和历史 Codex 应用名称。仅在这些
+Desktop 路径与常见全局安装目录均不存在时，才提示安装全局 Codex CLI。
+
 ## 零侵入边界
 
 - 一键配置只定向修改 Codex 用户目录内的 `config.toml`，并生成独立的
