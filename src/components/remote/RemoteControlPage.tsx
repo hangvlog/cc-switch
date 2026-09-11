@@ -179,6 +179,9 @@ export function RemoteControlPage() {
       const status = await remoteApi.startRemote();
       setRemoteRunning(status.running);
       const ticket = await remoteAccountApi.createSocketTicket();
+      if (!ticket.websocketUrl) {
+        throw new Error("远程服务返回的连接地址无效");
+      }
       await connectBridge(ticket.websocketUrl);
     } catch (error) {
       setRemoteRunning(false);
