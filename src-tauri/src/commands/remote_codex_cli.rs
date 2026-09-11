@@ -105,6 +105,7 @@ fn codex_cli_candidates_on_path(path: Option<std::ffi::OsString>) -> Vec<PathBuf
         .collect()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn append_versioned_codex_candidates(
     candidates: &mut Vec<PathBuf>,
     versions_root: &Path,
