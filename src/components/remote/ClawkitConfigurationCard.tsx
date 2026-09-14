@@ -79,7 +79,8 @@ export function ClawkitConfigurationCard({
           <div>
             <CardTitle className="text-lg">一键配置 Codex</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              已登录 {displayName}；账号模型、模型服务地址和连接参数均由应用配置。
+              已登录 {displayName}
+              ；账号模型、模型服务地址和连接参数均由应用配置。
             </p>
           </div>
         </div>
