@@ -335,7 +335,9 @@ jobs:
           if ($env:WINDOWS_RELEASE_ARCH -eq 'arm64') {
             pnpm tauri build --target aarch64-pc-windows-msvc --bundles msi
           } else {
-            pnpm tauri build
+            # 官网 Windows x64 主安装包保持为用户熟悉的 NSIS .exe。
+            # 不再依赖默认 bundles，避免整理产物时误选 WiX .msi。
+            pnpm tauri build --bundles nsis
           }
 
       - name: Build Tauri App (Linux)
@@ -540,34 +542,32 @@ jobs:
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
           $VERSION = $env:RELEASE_TAG  # e.g., v3.5.0
+          $VERSION_NUMBER = $VERSION.TrimStart('v')
           $isArm64 = $env:WINDOWS_RELEASE_ARCH -eq 'arm64'
           $targetRoot = if ($isArm64) { 'src-tauri/target/aarch64-pc-windows-msvc/release' } else { 'src-tauri/target/release' }
           $assetSuffix = if ($isArm64) { '-arm64' } else { '' }
 
-          # 仅打包 MSI 安装器 + .sig（用于 Updater）
-          $msi = Get-ChildItem -Path (Join-Path $targetRoot 'bundle/msi') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
-          if ($null -eq $msi) {
-            # 兜底：全局搜索 .msi
-            $msi = Get-ChildItem -Path (Join-Path $targetRoot 'bundle') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
-          }
-          if ($null -ne $msi) {
-            $dest = "CC-Switch-$VERSION-Windows$assetSuffix.msi"
-            Copy-Item $msi.FullName (Join-Path release-assets $dest)
-            Write-Host "Installer copied: $dest"
-            $sigPath = "$($msi.FullName).sig"
-            if (Test-Path $sigPath) {
-              Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
-              Write-Host "Signature copied: $dest.sig"
-            } elseif ($isArm64) {
-              throw "Signature not found for $($msi.Name)"
-            } else {
-              Write-Warning "Signature not found for $($msi.Name)"
-            }
-          } elseif ($isArm64) {
-            throw 'No Windows ARM64 MSI installer found'
+          if ($isArm64) {
+            # Tauri 当前为 Windows ARM64 生成 WiX MSI。
+            $installer = Get-ChildItem -Path (Join-Path $targetRoot 'bundle/msi') -Recurse -Include *.msi -ErrorAction SilentlyContinue | Select-Object -First 1
+            $dest = "ClawKit-$VERSION_NUMBER-windows-arm64.msi"
           } else {
-            Write-Warning 'No Windows MSI installer found'
+            # Windows x64 官网与自动更新统一使用 NSIS setup.exe。
+            $installer = Get-ChildItem -Path (Join-Path $targetRoot 'bundle/nsis') -Recurse -Include *-setup.exe -ErrorAction SilentlyContinue | Select-Object -First 1
+            $dest = "ClawKit-$VERSION_NUMBER-windows-x64-setup.exe"
           }
+          if ($null -eq $installer) {
+            throw "Windows installer not found under $targetRoot"
+          }
+          Copy-Item $installer.FullName (Join-Path release-assets $dest)
+          Write-Host "Installer copied: $dest"
+
+          $sigPath = "$($installer.FullName).sig"
+          if (-not (Test-Path $sigPath)) {
+            throw "Signature not found for $($installer.Name)"
+          }
+          Copy-Item $sigPath (Join-Path release-assets ("$dest.sig"))
+          Write-Host "Signature copied: $dest.sig"
 
           # 绿色版（portable）：仅可执行文件打 zip（不参与 Updater）
           $exeCandidates = if ($isArm64) {
@@ -580,7 +580,7 @@ jobs:
           }
           $exePath = $exeCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
           if ($null -ne $exePath) {
-            $portableDir = 'release-assets/CC-Switch-Portable'
+            $portableDir = 'release-assets/ClawKit-Portable'
             New-Item -ItemType Directory -Force -Path $portableDir | Out-Null
             Copy-Item $exePath $portableDir
             $portableIniPath = Join-Path $portableDir 'portable.ini'
@@ -597,10 +597,10 @@ jobs:
               )
             }
             $portableContent | Set-Content -Path $portableIniPath -Encoding UTF8
-            $portableZip = "release-assets/CC-Switch-$VERSION-Windows$assetSuffix-Portable.zip"
+            $portableZip = "release-assets/ClawKit-$VERSION_NUMBER-windows$assetSuffix-portable.zip"
             Compress-Archive -Path "$portableDir/*" -DestinationPath $portableZip -Force
             Remove-Item -Recurse -Force $portableDir
-            Write-Host "Windows portable zip created: CC-Switch-$VERSION-Windows$assetSuffix-Portable.zip"
+            Write-Host "Windows portable zip created: ClawKit-$VERSION_NUMBER-windows$assetSuffix-portable.zip"
           } elseif ($isArm64) {
             throw 'Portable ARM64 exe not found'
           } else {
@@ -703,19 +703,19 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: CC Switch ${{ env.RELEASE_TAG }}
+          name: ClawKit Desktop ${{ env.RELEASE_TAG }}
           prerelease: true
           body: |
-            ## CC Switch ${{ env.RELEASE_TAG }}
+            ## ClawKit Desktop ${{ env.RELEASE_TAG }}
 
-            🌐 **Only Official Website / 唯一官方网站 / 唯一の公式サイト**: [ccswitch.io](https://ccswitch.io)
+            🌐 **官网**: [clawkit.chat/download](https://clawkit.chat/download/)
 
-            Claude Code 供应商切换工具
+            ClawKit Desktop 桌面端
 
             ### 下载
 
-            - **Windows (x86_64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Windows.msi`（安装版）或 `CC-Switch-${{ env.RELEASE_TAG }}-Windows-Portable.zip`（绿色版）
-            - **Windows (ARM64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Windows-arm64.msi`（安装版）或 `CC-Switch-${{ env.RELEASE_TAG }}-Windows-arm64-Portable.zip`（绿色版）
+            - **Windows (x86_64)**: `ClawKit-*-windows-x64-setup.exe`（安装版）或 `ClawKit-*-windows-portable.zip`（绿色版）
+            - **Windows (ARM64)**: `ClawKit-*-windows-arm64.msi`（安装版）或 `ClawKit-*-windows-arm64-portable.zip`（绿色版）
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -766,10 +766,18 @@ jobs:
               *.tar.gz)
                 # 视为 macOS updater artifact
                 mac_url="$url"; mac_sig="$sig_content";;
-              *-Windows-arm64.msi)
-                win_arm64_url="$url"; win_arm64_sig="$sig_content";;
-              *-Windows.msi)
+              ClawKit-*-windows-x64-setup.exe)
                 win_x64_url="$url"; win_x64_sig="$sig_content";;
+              ClawKit-*-windows-arm64.msi)
+                win_arm64_url="$url"; win_arm64_sig="$sig_content";;
+              *-Windows-arm64.msi)
+                if [ -z "$win_arm64_url" ]; then
+                  win_arm64_url="$url"; win_arm64_sig="$sig_content"
+                fi;;
+              *-Windows.msi)
+                if [ -z "$win_x64_url" ]; then
+                  win_x64_url="$url"; win_x64_sig="$sig_content"
+                fi;;
               *-Linux-arm64.AppImage|*-Linux-arm64.appimage)
                 linux_arm64_url="$url"; linux_arm64_sig="$sig_content";;
               *-Linux-x86_64.AppImage|*-Linux-x86_64.appimage)
