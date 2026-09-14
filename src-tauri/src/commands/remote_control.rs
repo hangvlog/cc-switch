@@ -106,9 +106,10 @@ pub async fn get_clawkit_codex_model_options(
 #[tauri::command]
 pub async fn configure_clawkit_codex(
     selected_model: Option<String>,
+    base_url: Option<String>,
 ) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
     let gateway = crate::clawkit_gateway::bootstrap().await?;
-    crate::clawkit_codex_config::apply(&gateway, selected_model.as_deref())
+    crate::clawkit_codex_config::apply(&gateway, selected_model.as_deref(), base_url.as_deref())
 }
 
 #[tauri::command]

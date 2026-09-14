@@ -17,6 +17,12 @@ import {
 } from "@/lib/api/remoteAccount";
 import { AccountLoginCard } from "@/components/remote/AccountLoginCard";
 import { ClawkitConfigurationCard } from "@/components/remote/ClawkitConfigurationCard";
+import {
+  COMPATIBILITY_CODEX_ENDPOINT,
+  SECURE_CODEX_ENDPOINT,
+  endpointModeFor,
+  type CodexEndpointMode,
+} from "@/components/remote/CodexEndpointSelector";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -37,6 +43,10 @@ export function RemoteControlPage() {
   const [configurationReady, setConfigurationReady] = useState(false);
   const [configuredModel, setConfiguredModel] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
+  const [configuredEndpoint, setConfiguredEndpoint] = useState("");
+  const [endpointMode, setEndpointMode] =
+    useState<CodexEndpointMode>("compatibility");
+  const [customEndpoint, setCustomEndpoint] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [canRollback, setCanRollback] = useState(false);
@@ -45,6 +55,20 @@ export function RemoteControlPage() {
   const [plusPlus, setPlusPlus] = useState<CodexPlusPlusStatus | null>(null);
   const relaySocket = useRef<WebSocket | null>(null);
   const nativeUnlisten = useRef<UnlistenFn | null>(null);
+  const selectedEndpoint =
+    endpointMode === "compatibility"
+      ? COMPATIBILITY_CODEX_ENDPOINT
+      : endpointMode === "secure"
+        ? SECURE_CODEX_ENDPOINT
+        : customEndpoint.trim();
+
+  const restoreEndpointSelection = useCallback((baseUrl?: string) => {
+    if (!baseUrl) return;
+    const mode = endpointModeFor(baseUrl);
+    setConfiguredEndpoint(baseUrl);
+    setEndpointMode(mode);
+    if (mode === "custom") setCustomEndpoint(baseUrl);
+  }, []);
 
   const closeSockets = useCallback(() => {
     const socket = relaySocket.current;
@@ -86,6 +110,7 @@ export function RemoteControlPage() {
         setConfiguredModel(status.model || "");
         if (status.models?.length) setAvailableModels(status.models);
         if (status.model) setSelectedModel(status.model);
+        restoreEndpointSelection(status.baseUrl);
       })
       .catch(() => null);
     void remoteApi
@@ -93,7 +118,7 @@ export function RemoteControlPage() {
       .then((status) => setRemoteRunning(status.running))
       .catch(() => null);
     return closeSockets;
-  }, [closeSockets]);
+  }, [closeSockets, restoreEndpointSelection]);
 
   const connectBridge = useCallback(async (websocketUrl: string) => {
     const relay = new WebSocket(websocketUrl);
@@ -134,13 +159,14 @@ export function RemoteControlPage() {
       setConfigurationBusy(true);
       try {
         const status = selectedModel
-          ? await remoteApi.configure(selectedModel)
-          : await remoteApi.configure();
+          ? await remoteApi.configure(selectedModel, selectedEndpoint)
+          : await remoteApi.configure(undefined, selectedEndpoint);
         setConfigurationReady(status.configured);
         setCanRollback(status.canRollback);
         setConfiguredModel(status.model || "");
         setSelectedModel(status.model || "");
         setAvailableModels(status.models || []);
+        restoreEndpointSelection(status.baseUrl);
         toast.success("Codex 配置已完成，重启 Codex 后生效");
       } catch (error) {
         setConfigurationReady(false);
@@ -151,7 +177,7 @@ export function RemoteControlPage() {
         setConfigurationBusy(false);
       }
     },
-    [account, selectedModel],
+    [account, restoreEndpointSelection, selectedEndpoint, selectedModel],
   );
 
   const rollbackConfiguration = async () => {
@@ -163,6 +189,8 @@ export function RemoteControlPage() {
       setConfiguredModel(status.model || "");
       setSelectedModel(status.model || "");
       setAvailableModels(status.models || []);
+      setConfiguredEndpoint(status.baseUrl || "");
+      restoreEndpointSelection(status.baseUrl);
       toast.success("已恢复一键配置前的 Codex 配置");
     } catch (error) {
       toast.error(extractErrorMessage(error) || "恢复 Codex 配置失败");
@@ -268,12 +296,18 @@ export function RemoteControlPage() {
         displayName={displayName}
         configured={configurationReady}
         configuredModel={configuredModel}
+        configuredEndpoint={configuredEndpoint}
         selectedModel={selectedModel}
+        selectedEndpoint={selectedEndpoint}
+        endpointMode={endpointMode}
+        customEndpoint={customEndpoint}
         models={availableModels}
         busy={configurationBusy}
         modelsLoading={modelsLoading}
         canRollback={canRollback}
         onModelChange={setSelectedModel}
+        onEndpointModeChange={setEndpointMode}
+        onCustomEndpointChange={setCustomEndpoint}
         onConfigure={() => void configure()}
         onRollback={() => void rollbackConfiguration()}
         onLogout={() => void logout()}

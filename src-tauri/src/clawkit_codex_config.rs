@@ -7,6 +7,7 @@ const PROVIDER_ID: &str = "clawkit";
 const MODEL_CATALOG_FILE: &str = "clawkit-models.json";
 const BACKUP_MANIFEST_FILE: &str = "manifest.json";
 const MAX_BACKUPS: usize = 10;
+pub const DEFAULT_CODEX_API_BASE_URL: &str = "http://62.234.99.177:80/v1";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +17,8 @@ pub struct ClawkitCodexConfigurationStatus {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
     pub config_path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub available_quota: Option<i64>,
@@ -74,9 +77,10 @@ pub fn status() -> ClawkitCodexConfigurationStatus {
 pub fn apply(
     gateway: &crate::clawkit_gateway::GatewayBootstrap,
     selected_model: Option<&str>,
+    selected_base_url: Option<&str>,
 ) -> Result<ClawkitCodexConfigurationStatus, String> {
     let home = crate::codex_config::get_codex_config_dir();
-    apply_at_home(gateway, &home, selected_model)
+    apply_at_home(gateway, &home, selected_model, selected_base_url)
 }
 
 pub fn model_options(
@@ -94,6 +98,7 @@ fn apply_at_home(
     gateway: &crate::clawkit_gateway::GatewayBootstrap,
     home: &Path,
     selected_model: Option<&str>,
+    selected_base_url: Option<&str>,
 ) -> Result<ClawkitCodexConfigurationStatus, String> {
     let config_path = home.join("config.toml");
     let catalog_path = home.join(MODEL_CATALOG_FILE);
@@ -107,12 +112,8 @@ fn apply_at_home(
         .unwrap_or_default();
     let available_models = crate::clawkit_gateway::normalized_models(&gateway.models);
     let default_model = resolve_model(&available_models, selected_model)?;
-    let updated = managed_config_text(
-        &existing,
-        &gateway.base_url,
-        &gateway.api_key,
-        default_model,
-    )?;
+    let base_url = resolve_base_url(selected_base_url)?;
+    let updated = managed_config_text(&existing, &base_url, &gateway.api_key, default_model)?;
     let backup_dir = create_backup(home, &config_snapshot, &catalog_snapshot)?;
 
     let write_result = (|| {
@@ -139,11 +140,36 @@ fn apply_at_home(
         configured: true,
         model: Some(default_model.to_string()),
         models: available_models,
+        base_url: Some(base_url),
         config_path: config_path.to_string_lossy().to_string(),
         available_quota: Some(gateway.available_quota),
         used_quota: Some(gateway.used_quota),
         can_rollback: latest_backup_dir(home).is_some(),
     })
+}
+
+fn resolve_base_url(selected_base_url: Option<&str>) -> Result<String, String> {
+    let value = selected_base_url
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_CODEX_API_BASE_URL);
+    normalize_codex_base_url(value)
+}
+
+fn normalize_codex_base_url(value: &str) -> Result<String, String> {
+    let value = value.trim().trim_end_matches('/');
+    let parsed = url::Url::parse(value)
+        .map_err(|_| "模型服务地址无效，请填写完整的 HTTP 或 HTTPS 地址".to_string())?;
+    if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+        return Err("模型服务地址必须使用 HTTP 或 HTTPS".to_string());
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("模型服务地址不能包含用户名或密码".to_string());
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err("模型服务地址不能包含查询参数或片段".to_string());
+    }
+    Ok(value.to_string())
 }
 
 fn resolve_model<'a>(
@@ -292,9 +318,14 @@ fn status_from_home(home: &Path) -> ClawkitCodexConfigurationStatus {
         .and_then(|doc| doc.get("model"))
         .and_then(Item::as_str)
         .map(str::to_string);
+    let base_url = parsed
+        .as_ref()
+        .and_then(|doc| provider_value(doc, "base_url"))
+        .map(str::to_string);
     let configured = parsed.as_ref().is_some_and(|doc| {
         doc.get("model_provider").and_then(Item::as_str) == Some(PROVIDER_ID)
-            && provider_has_value(doc, "base_url")
+            && provider_value(doc, "base_url")
+                .is_some_and(|value| normalize_codex_base_url(value).is_ok())
             && provider_has_value(doc, "experimental_bearer_token")
             && doc.get("model_catalog_json").and_then(Item::as_str) == Some(MODEL_CATALOG_FILE)
             && catalog_path.is_file()
@@ -322,6 +353,7 @@ fn status_from_home(home: &Path) -> ClawkitCodexConfigurationStatus {
         configured,
         model,
         models,
+        base_url,
         config_path: config_path.to_string_lossy().to_string(),
         available_quota: None,
         used_quota: None,
@@ -330,13 +362,16 @@ fn status_from_home(home: &Path) -> ClawkitCodexConfigurationStatus {
 }
 
 fn provider_has_value(doc: &DocumentMut, key: &str) -> bool {
+    provider_value(doc, key).is_some_and(|value| !value.trim().is_empty())
+}
+
+fn provider_value<'a>(doc: &'a DocumentMut, key: &str) -> Option<&'a str> {
     doc.get("model_providers")
         .and_then(Item::as_table)
         .and_then(|providers| providers.get(PROVIDER_ID))
         .and_then(Item::as_table)
         .and_then(|provider| provider.get(key))
         .and_then(Item::as_str)
-        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn managed_config_text(

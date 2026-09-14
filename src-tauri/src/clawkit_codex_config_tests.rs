@@ -1,6 +1,7 @@
 use super::{
-    apply_at_home, managed_config_text, resolve_model, rollback_at_home, status_from_home,
-    MODEL_CATALOG_FILE, PROVIDER_ID,
+    apply_at_home, managed_config_text, normalize_codex_base_url, resolve_base_url, resolve_model,
+    rollback_at_home, status_from_home, DEFAULT_CODEX_API_BASE_URL, MODEL_CATALOG_FILE,
+    PROVIDER_ID,
 };
 use crate::clawkit_gateway::GatewayBootstrap;
 use toml_edit::{DocumentMut, Item};
@@ -62,6 +63,7 @@ fn status_requires_managed_config_and_catalog() {
     assert!(status.configured);
     assert_eq!(status.model.as_deref(), Some("model-a"));
     assert_eq!(status.models, ["model-a"]);
+    assert_eq!(status.base_url.as_deref(), Some("https://gateway.test/v1"));
 }
 
 #[test]
@@ -79,15 +81,18 @@ fn apply_preserves_auth_and_unrelated_config_then_rolls_back() {
     let original_config = std::fs::read(&config_path).unwrap();
     let gateway = GatewayBootstrap {
         api_key: "sk-private".into(),
-        base_url: "https://gateway.test/v1".into(),
         models: vec!["gpt-5.6-sol".into()],
         available_quota: 100,
         used_quota: 5,
     };
 
-    let applied = apply_at_home(&gateway, temp.path(), None).unwrap();
+    let applied = apply_at_home(&gateway, temp.path(), None, None).unwrap();
     assert!(applied.configured);
     assert!(applied.can_rollback);
+    assert_eq!(
+        applied.base_url.as_deref(),
+        Some(DEFAULT_CODEX_API_BASE_URL)
+    );
     assert_eq!(std::fs::read(&auth_path).unwrap(), original_auth);
     let configured = std::fs::read_to_string(&config_path).unwrap();
     assert!(configured.contains("[mcp_servers.keep_me]"));
@@ -100,6 +105,7 @@ fn apply_preserves_auth_and_unrelated_config_then_rolls_back() {
         .and_then(|provider| provider.get("experimental_bearer_token"))
         .and_then(Item::as_str);
     assert_eq!(configured_token, Some("sk-private"), "{configured}");
+    assert!(configured.contains(&format!("base_url = \"{DEFAULT_CODEX_API_BASE_URL}\"")));
 
     let restored = rollback_at_home(temp.path()).unwrap();
     assert!(!restored.configured);
@@ -113,14 +119,23 @@ fn apply_uses_an_allowed_selected_model() {
     let temp = tempfile::tempdir().unwrap();
     let gateway = GatewayBootstrap {
         api_key: "sk-private".into(),
-        base_url: "https://gateway.test/v1".into(),
         models: vec!["gpt-5.6-sol".into(), "gpt-5.6-terra".into()],
         available_quota: 100,
         used_quota: 5,
     };
 
-    let applied = apply_at_home(&gateway, temp.path(), Some("gpt-5.6-terra")).unwrap();
+    let applied = apply_at_home(
+        &gateway,
+        temp.path(),
+        Some("gpt-5.6-terra"),
+        Some("https://api.clawkit.chat/v1"),
+    )
+    .unwrap();
     assert_eq!(applied.model.as_deref(), Some("gpt-5.6-terra"));
+    assert_eq!(
+        applied.base_url.as_deref(),
+        Some("https://api.clawkit.chat/v1")
+    );
     let configured = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
     assert!(configured.contains("model = \"gpt-5.6-terra\""));
 }
@@ -130,13 +145,12 @@ fn apply_rejects_a_model_outside_the_account_allowlist() {
     let temp = tempfile::tempdir().unwrap();
     let gateway = GatewayBootstrap {
         api_key: "sk-private".into(),
-        base_url: "https://gateway.test/v1".into(),
         models: vec!["gpt-5.6-sol".into()],
         available_quota: 100,
         used_quota: 5,
     };
 
-    let error = apply_at_home(&gateway, temp.path(), Some("unauthorized-model")).unwrap_err();
+    let error = apply_at_home(&gateway, temp.path(), Some("unauthorized-model"), None).unwrap_err();
     assert!(error.contains("不在当前账号"));
     assert!(!temp.path().join("config.toml").exists());
 }
@@ -145,4 +159,38 @@ fn apply_rejects_a_model_outside_the_account_allowlist() {
 fn empty_selection_keeps_the_preferred_sol_default() {
     let models = vec!["gpt-5.6-terra".into(), "gpt-5.6-sol".into()];
     assert_eq!(resolve_model(&models, None).unwrap(), "gpt-5.6-sol");
+}
+
+#[test]
+fn empty_endpoint_selection_uses_the_compatibility_default() {
+    assert_eq!(resolve_base_url(None).unwrap(), DEFAULT_CODEX_API_BASE_URL);
+    assert_eq!(
+        resolve_base_url(Some("   ")).unwrap(),
+        DEFAULT_CODEX_API_BASE_URL
+    );
+}
+
+#[test]
+fn custom_endpoint_accepts_http_and_https_and_removes_trailing_slashes() {
+    assert_eq!(
+        normalize_codex_base_url(" http://10.0.0.8:8080/v1/// ").unwrap(),
+        "http://10.0.0.8:8080/v1"
+    );
+    assert_eq!(
+        normalize_codex_base_url("https://gateway.example/custom/v1/").unwrap(),
+        "https://gateway.example/custom/v1"
+    );
+}
+
+#[test]
+fn custom_endpoint_rejects_unsafe_or_non_http_urls() {
+    for value in [
+        "gateway.example/v1",
+        "ftp://gateway.example/v1",
+        "https://user:password@gateway.example/v1",
+        "https://gateway.example/v1?token=secret",
+        "https://gateway.example/v1#fragment",
+    ] {
+        assert!(normalize_codex_base_url(value).is_err(), "accepted {value}");
+    }
 }

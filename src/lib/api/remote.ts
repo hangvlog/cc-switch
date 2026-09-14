@@ -12,6 +12,7 @@ export interface ClawkitCodexConfigurationStatus {
   configured: boolean;
   model?: string;
   models?: string[];
+  baseUrl?: string;
   configPath: string;
   availableQuota?: number;
   usedQuota?: number;
@@ -42,9 +43,10 @@ export const remoteApi = {
     ),
   modelOptions: () =>
     invoke<ClawkitCodexModelOptions>("get_clawkit_codex_model_options"),
-  configure: (selectedModel?: string) =>
+  configure: (selectedModel?: string, baseUrl?: string) =>
     invoke<ClawkitCodexConfigurationStatus>("configure_clawkit_codex", {
       selectedModel: selectedModel || null,
+      baseUrl: baseUrl || null,
     }),
   uploadDiagnosticBundle: () =>
     invoke<DiagnosticBundleUpload>("upload_clawkit_diagnostic_bundle"),

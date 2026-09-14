@@ -13,7 +13,6 @@ const DEFAULT_GATEWAY_API_BASE: &str = "https://api.clawkit.chat";
 #[derive(Debug, Clone)]
 pub struct GatewayBootstrap {
     pub api_key: String,
-    pub base_url: String,
     pub models: Vec<String>,
     pub available_quota: i64,
     pub used_quota: i64,
@@ -30,7 +29,6 @@ struct BootstrapEnvelope {
 #[derive(Debug, Deserialize)]
 struct BootstrapData {
     api_key: String,
-    base_url: String,
     #[serde(default)]
     models: Vec<String>,
     #[serde(default)]
@@ -90,7 +88,6 @@ pub async fn bootstrap() -> Result<GatewayBootstrap, String> {
     }
     Ok(GatewayBootstrap {
         api_key: data.api_key,
-        base_url: normalize_api_base(&data.base_url)?,
         models: data.models,
         available_quota: data.quota.available,
         used_quota: data.quota.used,

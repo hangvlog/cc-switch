@@ -3,17 +3,29 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CodexModelSelector } from "@/components/remote/CodexModelSelector";
+import {
+  CodexEndpointSelector,
+  type CodexEndpointMode,
+  isValidCodexEndpoint,
+  normalizeEndpointForComparison,
+} from "@/components/remote/CodexEndpointSelector";
 
 interface ClawkitConfigurationCardProps {
   displayName: string;
   configured: boolean;
   configuredModel: string;
+  configuredEndpoint: string;
   selectedModel: string;
+  selectedEndpoint: string;
+  endpointMode: CodexEndpointMode;
+  customEndpoint: string;
   models: string[];
   busy: boolean;
   modelsLoading: boolean;
   canRollback: boolean;
   onModelChange: (model: string) => void;
+  onEndpointModeChange: (mode: CodexEndpointMode) => void;
+  onCustomEndpointChange: (value: string) => void;
   onConfigure: () => void;
   onRollback: () => void;
   onLogout: () => void;
@@ -23,19 +35,38 @@ export function ClawkitConfigurationCard({
   displayName,
   configured,
   configuredModel,
+  configuredEndpoint,
   selectedModel,
+  selectedEndpoint,
+  endpointMode,
+  customEndpoint,
   models,
   busy,
   modelsLoading,
   canRollback,
   onModelChange,
+  onEndpointModeChange,
+  onCustomEndpointChange,
   onConfigure,
   onRollback,
   onLogout,
 }: ClawkitConfigurationCardProps) {
-  const statusLabel = configured ? "配置完成" : busy ? "正在配置" : "尚未配置";
+  const endpointChanged =
+    Boolean(configuredEndpoint) &&
+    normalizeEndpointForComparison(selectedEndpoint) !==
+      normalizeEndpointForComparison(configuredEndpoint);
   const modelChanged =
     Boolean(configuredModel) && selectedModel !== configuredModel;
+  const configurationChanged = modelChanged || endpointChanged;
+  const customEndpointInvalid =
+    endpointMode === "custom" && !isValidCodexEndpoint(customEndpoint);
+  const statusLabel = busy
+    ? "正在配置"
+    : configurationChanged
+      ? "待应用"
+      : configured
+        ? "配置完成"
+        : "尚未配置";
 
   return (
     <Card className="overflow-hidden border-primary/25 shadow-sm">
@@ -48,12 +79,15 @@ export function ClawkitConfigurationCard({
           <div>
             <CardTitle className="text-lg">一键配置 Codex</CardTitle>
             <p className="mt-1 text-sm text-muted-foreground">
-              已登录 {displayName}；账号模型、API
-              网关和安全连接均由应用自动配置。
+              已登录 {displayName}；账号模型、模型服务地址和连接参数均由应用配置。
             </p>
           </div>
         </div>
-        <Badge variant={configured ? "default" : "secondary"}>
+        <Badge
+          variant={
+            configured && !configurationChanged ? "default" : "secondary"
+          }
+        >
           {statusLabel}
         </Badge>
       </CardHeader>
@@ -63,6 +97,13 @@ export function ClawkitConfigurationCard({
           value={selectedModel}
           onValueChange={onModelChange}
           disabled={busy || modelsLoading || !models.length}
+        />
+        <CodexEndpointSelector
+          mode={endpointMode}
+          customValue={customEndpoint}
+          onModeChange={onEndpointModeChange}
+          onCustomValueChange={onCustomEndpointChange}
+          disabled={busy}
         />
         <div className="flex items-center justify-between rounded-md border px-3 py-3">
           <div className="flex items-start gap-3">
@@ -89,7 +130,9 @@ export function ClawkitConfigurationCard({
             ) : null}
             <Button
               onClick={onConfigure}
-              disabled={busy || modelsLoading || !selectedModel}
+              disabled={
+                busy || modelsLoading || !selectedModel || customEndpointInvalid
+              }
             >
               {configured ? (
                 <RefreshCw className="mr-2 h-4 w-4" />
@@ -98,8 +141,8 @@ export function ClawkitConfigurationCard({
               )}
               {busy
                 ? "正在配置"
-                : modelChanged
-                  ? "应用所选模型"
+                : configurationChanged
+                  ? "应用所选配置"
                   : configured
                     ? "重新配置"
                     : "立即一键配置"}

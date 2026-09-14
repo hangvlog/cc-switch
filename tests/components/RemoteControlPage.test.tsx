@@ -70,6 +70,10 @@ vi.mock("sonner", () => ({
 }));
 
 import { RemoteControlPage } from "@/components/remote/RemoteControlPage";
+import {
+  COMPATIBILITY_CODEX_ENDPOINT,
+  SECURE_CODEX_ENDPOINT,
+} from "@/components/remote/CodexEndpointSelector";
 
 class FakeWebSocket {
   static readonly OPEN = 1;
@@ -131,6 +135,7 @@ describe("RemoteControlPage", () => {
       configured: true,
       model: "gpt-5.6-sol",
       models: ["gpt-5.6-sol", "gpt-5.6-terra"],
+      baseUrl: COMPATIBILITY_CODEX_ENDPOINT,
       configPath: "/test/.codex/config.toml",
       canRollback: true,
     });
@@ -185,7 +190,10 @@ describe("RemoteControlPage", () => {
     await login();
 
     expect(mocks.accountLogin).toHaveBeenCalledWith("hang", "secret");
-    expect(mocks.configure).toHaveBeenCalledWith();
+    expect(mocks.configure).toHaveBeenCalledWith(
+      undefined,
+      COMPATIBILITY_CODEX_ENDPOINT,
+    );
     expect(mocks.startRemote).not.toHaveBeenCalled();
     expect(mocks.socketTicket).not.toHaveBeenCalled();
     expect(FakeWebSocket.instances).toHaveLength(0);
@@ -259,8 +267,95 @@ describe("RemoteControlPage", () => {
     await user.click(screen.getByRole("button", { name: "立即一键配置" }));
 
     await waitFor(() =>
-      expect(mocks.configure).toHaveBeenCalledWith("gpt-5.6-terra"),
+      expect(mocks.configure).toHaveBeenCalledWith(
+        "gpt-5.6-terra",
+        COMPATIBILITY_CODEX_ENDPOINT,
+      ),
     );
+  });
+
+  it("offers HTTP by default and can apply the HTTPS endpoint", async () => {
+    mocks.accountStatus.mockResolvedValue({
+      status: "ok",
+      authenticated: true,
+      user: { id: 7, username: "hang" },
+    });
+    const user = userEvent.setup();
+    render(<RemoteControlPage />);
+
+    const selector = await screen.findByRole("combobox", {
+      name: "模型服务地址",
+    });
+    expect(selector).toHaveTextContent("兼容 HTTP（默认）");
+    expect(screen.getByText(COMPATIBILITY_CODEX_ENDPOINT)).toBeInTheDocument();
+
+    await user.click(selector);
+    await user.click(await screen.findByRole("option", { name: "安全 HTTPS" }));
+    await user.click(screen.getByRole("button", { name: "立即一键配置" }));
+
+    await waitFor(() =>
+      expect(mocks.configure).toHaveBeenCalledWith(
+        "gpt-5.6-sol",
+        SECURE_CODEX_ENDPOINT,
+      ),
+    );
+  });
+
+  it("restores and applies a custom HTTP or HTTPS endpoint", async () => {
+    mocks.accountStatus.mockResolvedValue({
+      status: "ok",
+      authenticated: true,
+      user: { id: 7, username: "hang" },
+    });
+    mocks.configurationStatus.mockResolvedValue({
+      configured: true,
+      model: "gpt-5.6-sol",
+      models: ["gpt-5.6-sol"],
+      baseUrl: "https://custom.example/v1",
+      configPath: "/test/.codex/config.toml",
+      canRollback: true,
+    });
+    const user = userEvent.setup();
+    render(<RemoteControlPage />);
+
+    const selector = await screen.findByRole("combobox", {
+      name: "模型服务地址",
+    });
+    await waitFor(() => expect(selector).toHaveTextContent("自定义地址"));
+    const input = screen.getByLabelText("自定义 HTTP/HTTPS 地址");
+    expect(input).toHaveValue("https://custom.example/v1");
+
+    await user.clear(input);
+    await user.type(input, "http://10.0.0.8:8080/v1/");
+    await user.click(screen.getByRole("button", { name: "应用所选配置" }));
+
+    await waitFor(() =>
+      expect(mocks.configure).toHaveBeenCalledWith(
+        "gpt-5.6-sol",
+        "http://10.0.0.8:8080/v1/",
+      ),
+    );
+  });
+
+  it("does not apply an invalid custom endpoint", async () => {
+    mocks.accountStatus.mockResolvedValue({
+      status: "ok",
+      authenticated: true,
+      user: { id: 7, username: "hang" },
+    });
+    const user = userEvent.setup();
+    render(<RemoteControlPage />);
+
+    const selector = await screen.findByRole("combobox", {
+      name: "模型服务地址",
+    });
+    await user.click(selector);
+    await user.click(await screen.findByRole("option", { name: "自定义地址" }));
+    const input = screen.getByLabelText("自定义 HTTP/HTTPS 地址");
+    await user.type(input, "ftp://invalid.example/v1");
+
+    expect(screen.getByRole("button", { name: "立即一键配置" })).toBeDisabled();
+    expect(mocks.configure).not.toHaveBeenCalled();
   });
 
   it("checks the bundled helper without launching Codex", async () => {
