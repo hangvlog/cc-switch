@@ -232,6 +232,25 @@ describe("RemoteControlPage", () => {
     });
   });
 
+  it("reconnects the enabled phone bridge after the relay closes", async () => {
+    render(<RemoteControlPage />);
+    await login();
+
+    fireEvent.click(screen.getByRole("button", { name: /启用手机远程/ }));
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const firstSocket = FakeWebSocket.instances[0];
+    act(() => firstSocket.open());
+    act(() => firstSocket.onclose?.());
+
+    await waitFor(
+      () => {
+        expect(mocks.socketTicket).toHaveBeenCalledTimes(2);
+        expect(FakeWebSocket.instances).toHaveLength(2);
+      },
+      { timeout: 2_000 },
+    );
+  });
+
   it("restores the account without starting Codex or the remote bridge", async () => {
     mocks.accountStatus.mockResolvedValue({
       status: "ok",

@@ -55,6 +55,11 @@ export function RemoteControlPage() {
   const [plusPlus, setPlusPlus] = useState<CodexPlusPlusStatus | null>(null);
   const relaySocket = useRef<WebSocket | null>(null);
   const nativeUnlisten = useRef<UnlistenFn | null>(null);
+  const remoteDesired = useRef(false);
+  const reconnectAttempt = useRef(0);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectBridge = useRef<() => void>(() => undefined);
+  const bridgeConnecting = useRef(false);
   const selectedEndpoint =
     endpointMode === "compatibility"
       ? COMPATIBILITY_CODEX_ENDPOINT
@@ -71,12 +76,26 @@ export function RemoteControlPage() {
   }, []);
 
   const closeSockets = useCallback(() => {
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
     const socket = relaySocket.current;
     relaySocket.current = null;
     socket?.close();
     nativeUnlisten.current?.();
     nativeUnlisten.current = null;
     setPeerOnline(false);
+  }, []);
+
+  const scheduleReconnect = useCallback(() => {
+    if (!remoteDesired.current || reconnectTimer.current) return;
+    const delay = Math.min(1_000 * 2 ** reconnectAttempt.current, 10_000);
+    reconnectAttempt.current += 1;
+    reconnectTimer.current = setTimeout(() => {
+      reconnectTimer.current = null;
+      reconnectBridge.current();
+    }, delay);
   }, []);
 
   useEffect(() => {
@@ -117,7 +136,10 @@ export function RemoteControlPage() {
       .remoteStatus()
       .then((status) => setRemoteRunning(status.running))
       .catch(() => null);
-    return closeSockets;
+    return () => {
+      remoteDesired.current = false;
+      closeSockets();
+    };
   }, [closeSockets, restoreEndpointSelection]);
 
   const connectBridge = useCallback(async (websocketUrl: string) => {
@@ -133,7 +155,10 @@ export function RemoteControlPage() {
         }
       },
     );
-    relay.onopen = () => setState("waiting");
+    relay.onopen = () => {
+      reconnectAttempt.current = 0;
+      setState("waiting");
+    };
     relay.onmessage = (event) => {
       try {
         const message = JSON.parse(String(event.data));
@@ -147,11 +172,56 @@ export function RemoteControlPage() {
         console.warn("[RemoteBridge] invalid relay message", error);
       }
     };
-    relay.onerror = () => setState("error");
-    relay.onclose = () => {
-      if (relaySocket.current === relay) setState("error");
+    relay.onerror = () => {
+      if (relaySocket.current !== relay) return;
+      relaySocket.current = null;
+      nativeUnlisten.current?.();
+      nativeUnlisten.current = null;
+      relay.close();
+      setState("error");
+      scheduleReconnect();
     };
-  }, []);
+    relay.onclose = () => {
+      if (relaySocket.current !== relay) return;
+      relaySocket.current = null;
+      nativeUnlisten.current?.();
+      nativeUnlisten.current = null;
+      setPeerOnline(false);
+      setState("error");
+      scheduleReconnect();
+    };
+  }, [scheduleReconnect]);
+
+  const connectAccountBridge = useCallback(async () => {
+    if (
+      !remoteDesired.current ||
+      bridgeConnecting.current ||
+      relaySocket.current
+    ) return;
+    bridgeConnecting.current = true;
+    try {
+      const ticket = await remoteAccountApi.createSocketTicket();
+      if (!remoteDesired.current) return;
+      if (!ticket.websocketUrl) {
+        throw new Error("远程服务返回的连接地址无效");
+      }
+      await connectBridge(ticket.websocketUrl);
+    } catch {
+      if (!remoteDesired.current) return;
+      setState("error");
+      scheduleReconnect();
+    } finally {
+      bridgeConnecting.current = false;
+    }
+  }, [connectBridge, scheduleReconnect]);
+
+  reconnectBridge.current = () => void connectAccountBridge();
+
+  useEffect(() => {
+    if (!account?.authenticated || !remoteRunning || relaySocket.current) return;
+    remoteDesired.current = true;
+    void connectAccountBridge();
+  }, [account, connectAccountBridge, remoteRunning]);
 
   const configure = useCallback(
     async (targetAccount = account) => {
@@ -203,15 +273,13 @@ export function RemoteControlPage() {
     if (!account?.authenticated || !configurationReady) return;
     setState("starting");
     closeSockets();
+    remoteDesired.current = true;
     try {
       const status = await remoteApi.startRemote();
       setRemoteRunning(status.running);
-      const ticket = await remoteAccountApi.createSocketTicket();
-      if (!ticket.websocketUrl) {
-        throw new Error("远程服务返回的连接地址无效");
-      }
-      await connectBridge(ticket.websocketUrl);
+      await connectAccountBridge();
     } catch (error) {
+      remoteDesired.current = false;
       setRemoteRunning(false);
       setState("error");
       toast.warning(
@@ -219,7 +287,7 @@ export function RemoteControlPage() {
           "手机远程连接暂不可用；一键配置和 Codex 桌面端使用不受影响",
       );
     }
-  }, [account, closeSockets, configurationReady, connectBridge]);
+  }, [account, closeSockets, configurationReady, connectAccountBridge]);
 
   const login = async (username: string, password: string) => {
     setLoginBusy(true);
@@ -236,6 +304,7 @@ export function RemoteControlPage() {
   };
 
   const stopRemote = async () => {
+    remoteDesired.current = false;
     closeSockets();
     await remoteApi.stopRemote();
     setRemoteRunning(false);
