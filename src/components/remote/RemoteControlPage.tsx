@@ -142,62 +142,69 @@ export function RemoteControlPage() {
     };
   }, [closeSockets, restoreEndpointSelection]);
 
-  const connectBridge = useCallback(async (websocketUrl: string) => {
-    const relay = new WebSocket(websocketUrl);
-    relaySocket.current = relay;
-    nativeUnlisten.current = await listen<string>(
-      "codex-remote-message",
-      (event) => {
-        if (relay.readyState === WebSocket.OPEN) {
-          relay.send(
-            JSON.stringify({ type: "relay.data", payload: event.payload }),
-          );
+  const connectBridge = useCallback(
+    async (websocketUrl: string) => {
+      const relay = new WebSocket(websocketUrl);
+      relaySocket.current = relay;
+      nativeUnlisten.current = await listen<string>(
+        "codex-remote-message",
+        (event) => {
+          if (relay.readyState === WebSocket.OPEN) {
+            relay.send(
+              JSON.stringify({ type: "relay.data", payload: event.payload }),
+            );
+          }
+        },
+      );
+      relay.onopen = () => {
+        reconnectAttempt.current = 0;
+        setState("waiting");
+      };
+      relay.onmessage = (event) => {
+        try {
+          const message = JSON.parse(String(event.data));
+          if (message.type === "relay.data") {
+            void remoteApi.send(message.payload).catch(() => setState("error"));
+          } else if (
+            message.type === "relay.peer" &&
+            message.role === "mobile"
+          ) {
+            setPeerOnline(Boolean(message.online));
+            setState(message.online ? "connected" : "waiting");
+          }
+        } catch (error) {
+          console.warn("[RemoteBridge] invalid relay message", error);
         }
-      },
-    );
-    relay.onopen = () => {
-      reconnectAttempt.current = 0;
-      setState("waiting");
-    };
-    relay.onmessage = (event) => {
-      try {
-        const message = JSON.parse(String(event.data));
-        if (message.type === "relay.data") {
-          void remoteApi.send(message.payload).catch(() => setState("error"));
-        } else if (message.type === "relay.peer" && message.role === "mobile") {
-          setPeerOnline(Boolean(message.online));
-          setState(message.online ? "connected" : "waiting");
-        }
-      } catch (error) {
-        console.warn("[RemoteBridge] invalid relay message", error);
-      }
-    };
-    relay.onerror = () => {
-      if (relaySocket.current !== relay) return;
-      relaySocket.current = null;
-      nativeUnlisten.current?.();
-      nativeUnlisten.current = null;
-      relay.close();
-      setState("error");
-      scheduleReconnect();
-    };
-    relay.onclose = () => {
-      if (relaySocket.current !== relay) return;
-      relaySocket.current = null;
-      nativeUnlisten.current?.();
-      nativeUnlisten.current = null;
-      setPeerOnline(false);
-      setState("error");
-      scheduleReconnect();
-    };
-  }, [scheduleReconnect]);
+      };
+      relay.onerror = () => {
+        if (relaySocket.current !== relay) return;
+        relaySocket.current = null;
+        nativeUnlisten.current?.();
+        nativeUnlisten.current = null;
+        relay.close();
+        setState("error");
+        scheduleReconnect();
+      };
+      relay.onclose = () => {
+        if (relaySocket.current !== relay) return;
+        relaySocket.current = null;
+        nativeUnlisten.current?.();
+        nativeUnlisten.current = null;
+        setPeerOnline(false);
+        setState("error");
+        scheduleReconnect();
+      };
+    },
+    [scheduleReconnect],
+  );
 
   const connectAccountBridge = useCallback(async () => {
     if (
       !remoteDesired.current ||
       bridgeConnecting.current ||
       relaySocket.current
-    ) return;
+    )
+      return;
     bridgeConnecting.current = true;
     try {
       const ticket = await remoteAccountApi.createSocketTicket();
@@ -218,7 +225,8 @@ export function RemoteControlPage() {
   reconnectBridge.current = () => void connectAccountBridge();
 
   useEffect(() => {
-    if (!account?.authenticated || !remoteRunning || relaySocket.current) return;
+    if (!account?.authenticated || !remoteRunning || relaySocket.current)
+      return;
     remoteDesired.current = true;
     void connectAccountBridge();
   }, [account, connectAccountBridge, remoteRunning]);
