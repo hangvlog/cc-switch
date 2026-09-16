@@ -7,7 +7,7 @@ const PROVIDER_ID: &str = "clawkit";
 const MODEL_CATALOG_FILE: &str = "clawkit-models.json";
 const BACKUP_MANIFEST_FILE: &str = "manifest.json";
 const MAX_BACKUPS: usize = 10;
-pub const DEFAULT_CODEX_API_BASE_URL: &str = "http://62.234.99.177:80/v1";
+pub const DEFAULT_CODEX_API_BASE_URL: &str = "http://152.136.14.113:80/v1";
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

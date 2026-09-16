@@ -8,7 +8,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export const COMPATIBILITY_CODEX_ENDPOINT = "http://62.234.99.177:80/v1";
+export const COMPATIBILITY_CODEX_ENDPOINT = "http://152.136.14.113:80/v1";
 export const SECURE_CODEX_ENDPOINT = "https://api.clawkit.chat/v1";
 
 export type CodexEndpointMode = "compatibility" | "secure" | "custom";
