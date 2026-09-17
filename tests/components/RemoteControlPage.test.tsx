@@ -356,6 +356,33 @@ describe("RemoteControlPage", () => {
     );
   });
 
+  it("offers the new compatibility endpoint when reopening a legacy IP configuration", async () => {
+    mocks.accountStatus.mockResolvedValue({
+      authenticated: true,
+      user: { id: 7, username: "hang" },
+    });
+    mocks.configurationStatus.mockResolvedValue({
+      configured: true,
+      model: "gpt-5.6-sol",
+      models: ["gpt-5.6-sol"],
+      baseUrl: "http://62.234.99.177:80/v1",
+      configPath: "/test/.codex/config.toml",
+      canRollback: true,
+    });
+    render(<RemoteControlPage />);
+    const applyButton = await screen.findByRole("button", {
+      name: "应用所选配置",
+    });
+    expect(mocks.configure).not.toHaveBeenCalled();
+    fireEvent.click(applyButton);
+    await waitFor(() =>
+      expect(mocks.configure).toHaveBeenCalledWith(
+        "gpt-5.6-sol",
+        COMPATIBILITY_CODEX_ENDPOINT,
+      ),
+    );
+  });
+
   it("does not apply an invalid custom endpoint", async () => {
     mocks.accountStatus.mockResolvedValue({
       status: "ok",

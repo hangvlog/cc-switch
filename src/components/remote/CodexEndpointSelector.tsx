@@ -19,7 +19,12 @@ export function normalizeEndpointForComparison(value: string): string {
 
 export function endpointModeFor(value: string): CodexEndpointMode {
   const normalized = normalizeEndpointForComparison(value);
-  if (normalized === COMPATIBILITY_CODEX_ENDPOINT) return "compatibility";
+  if (
+    normalized === COMPATIBILITY_CODEX_ENDPOINT ||
+    normalized === "http://62.234.99.177:80/v1" ||
+    normalized === "http://62.234.99.177/v1"
+  )
+    return "compatibility";
   if (normalized === SECURE_CODEX_ENDPOINT) return "secure";
   return "custom";
 }

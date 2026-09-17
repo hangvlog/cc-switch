@@ -110,10 +110,11 @@ export function ClawkitConfigurationCard({
           <div className="flex items-start gap-3">
             <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />
             <div>
-              <div className="text-sm font-medium">零侵入配置</div>
+              <div className="text-sm font-medium">同步到 Codex 配置列表</div>
               <div className="text-xs text-muted-foreground">
-                仅定向更新 Codex 用户配置和模型目录；保留 auth.json、MCP、
-                Skills，不修改 Codex 应用、名称、图标或快捷方式。
+                配置后可在 CC Switch 的 Codex 供应商列表中查看 ClawKit API。
+                保留 auth.json、MCP、 Skills，不修改 Codex
+                应用、名称、图标或快捷方式。
               </div>
             </div>
           </div>

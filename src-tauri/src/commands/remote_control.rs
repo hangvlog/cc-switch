@@ -4,7 +4,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 struct ServerProcess {
     child: Child,
@@ -105,11 +105,23 @@ pub async fn get_clawkit_codex_model_options(
 
 #[tauri::command]
 pub async fn configure_clawkit_codex(
+    app: AppHandle,
     selected_model: Option<String>,
     base_url: Option<String>,
 ) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
     let gateway = crate::clawkit_gateway::bootstrap().await?;
-    crate::clawkit_codex_config::apply(&gateway, selected_model.as_deref(), base_url.as_deref())
+    let state = app
+        .try_state::<crate::store::AppState>()
+        .ok_or_else(|| "应用状态不可用".to_string())?;
+    let status = crate::clawkit_codex_config::apply(
+        &gateway,
+        state.inner(),
+        selected_model.as_deref(),
+        base_url.as_deref(),
+    )
+    .await?;
+    let _ = app.emit("universal-provider-synced", ());
+    Ok(status)
 }
 
 #[tauri::command]
@@ -119,9 +131,15 @@ pub async fn upload_clawkit_diagnostic_bundle(
 }
 
 #[tauri::command]
-pub fn rollback_clawkit_codex_configuration(
+pub async fn rollback_clawkit_codex_configuration(
+    app: AppHandle,
 ) -> Result<crate::clawkit_codex_config::ClawkitCodexConfigurationStatus, String> {
-    crate::clawkit_codex_config::rollback()
+    let state = app
+        .try_state::<crate::store::AppState>()
+        .ok_or_else(|| "应用状态不可用".to_string())?;
+    let status = crate::clawkit_codex_config::rollback(state.inner()).await?;
+    let _ = app.emit("universal-provider-synced", ());
+    Ok(status)
 }
 
 #[tauri::command]
