@@ -1,0 +1,17 @@
+[package]
+name = "clawkit-desktop-bridge"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"

@@ -2,6 +2,12 @@ name: CI
 
 on:
   workflow_dispatch:
+    inputs:
+      scope:
+        description: Checks to run
+        type: choice
+        options: [all, desktop-owner]
+        default: all
   pull_request:
     branches: [main]
   push:
@@ -13,6 +19,7 @@ concurrency:
 
 jobs:
   changes:
+    if: inputs.scope != 'desktop-owner'
     name: Detect changed areas
     runs-on: ubuntu-latest
     permissions:
@@ -232,3 +239,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             exit $LASTEXITCODE
           }
+
+  desktop-owner:
+    if: inputs.scope == 'desktop-owner'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Test desktop owner contract
+        run: cargo test --locked --manifest-path src-tauri/crates/desktop-bridge/Cargo.toml
+      - name: Build read-only native probe
+        run: cargo build --locked --release --target aarch64-apple-darwin --manifest-path src-tauri/crates/desktop-bridge/Cargo.toml --bin probe
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-owner-probe
+          path: src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/probe
