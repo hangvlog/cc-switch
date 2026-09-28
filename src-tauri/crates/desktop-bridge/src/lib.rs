@@ -157,7 +157,8 @@ impl Bridge {
         if let Some(reason) = history::send_block_reason(&checked.state) {
             return Err(reason.into());
         }
-        if checked.revision != initial.revision {
+        // A fresh follower subscription increments revision even when state is identical.
+        if checked.state != initial.state {
             return Err("原任务刚刚更新，请刷新后发送".into());
         }
         if let Some(receipt) = self.ledger.begin(id, thread, text)? {

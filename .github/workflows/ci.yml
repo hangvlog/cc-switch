@@ -6,7 +6,7 @@ on:
       scope:
         description: Checks to run
         type: choice
-        options: [all, desktop-owner]
+        options: [all, desktop-owner, desktop-probe]
         default: all
   pull_request:
     branches: [main]
@@ -14,12 +14,12 @@ on:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.ref }}-${{ inputs.scope }}
   cancel-in-progress: true
 
 jobs:
   changes:
-    if: inputs.scope != 'desktop-owner'
+    if: inputs.scope != 'desktop-owner' && inputs.scope != 'desktop-probe'
     name: Detect changed areas
     runs-on: ubuntu-latest
     permissions:
@@ -241,7 +241,7 @@ jobs:
           }
 
   desktop-owner:
-    if: inputs.scope == 'desktop-owner'
+    if: inputs.scope == 'desktop-owner' || inputs.scope == 'desktop-probe'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v6
@@ -259,11 +259,14 @@ jobs:
             src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/probe
             src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/examples/roundtrip
       - uses: actions/setup-node@v6
+        if: inputs.scope == 'desktop-owner'
         with:
           node-version: '20'
       - name: Enable pnpm
+        if: inputs.scope == 'desktop-owner'
         run: corepack enable && corepack install
       - uses: actions/cache@v5
+        if: inputs.scope == 'desktop-owner'
         with:
           path: |
             ~/.cargo/registry
@@ -272,13 +275,16 @@ jobs:
           key: owner-${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
       - name: Install locked frontend dependencies
+        if: inputs.scope == 'desktop-owner'
         run: pnpm install --frozen-lockfile
       - name: Check desktop integration
+        if: inputs.scope == 'desktop-owner'
         run: |
           pnpm typecheck
           pnpm exec vitest run tests/components/RemoteControlPage.test.tsx
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib desktop_remote
       - name: Build native macOS preview
+        if: inputs.scope == 'desktop-owner'
         run: |
           pnpm tauri build --target aarch64-apple-darwin --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
           codesign --force --deep --sign - "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app"
@@ -286,6 +292,7 @@ jobs:
           ditto -c -k --keepParent "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app" ClawKit-Desktop-macOS-preview.zip
           shasum -a 256 ClawKit-Desktop-macOS-preview.zip > SHA256SUMS
       - uses: actions/upload-artifact@v4
+        if: inputs.scope == 'desktop-owner'
         with:
           name: desktop-owner-macos-preview
           path: |
