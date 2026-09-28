@@ -5,6 +5,15 @@ use std::path::Path;
 
 pub struct Ledger(Connection);
 impl Ledger {
+    pub fn has_request(&self, id: &str) -> Result<bool, String> {
+        self.0
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM dispatches WHERE request_id=?1)",
+                [id],
+                |row| row.get(0),
+            )
+            .map_err(|e| e.to_string())
+    }
     pub fn open(directory: &Path) -> Result<Self, String> {
         std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
         #[cfg(unix)]

@@ -256,3 +256,36 @@ jobs:
         with:
           name: desktop-owner-probe
           path: src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/probe
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Enable pnpm
+        run: corepack enable && corepack install
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: owner-${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check desktop integration
+        run: |
+          pnpm typecheck
+          pnpm exec vitest run tests/components/RemoteControlPage.test.tsx
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib desktop_remote
+      - name: Build native macOS preview
+        run: |
+          pnpm tauri build --target aarch64-apple-darwin --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          codesign --force --deep --sign - "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app"
+          codesign --verify --deep --strict "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app"
+          ditto -c -k --keepParent "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app" ClawKit-Desktop-macOS-preview.zip
+          shasum -a 256 ClawKit-Desktop-macOS-preview.zip > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-owner-macos-preview
+          path: |
+            ClawKit-Desktop-macOS-preview.zip
+            SHA256SUMS

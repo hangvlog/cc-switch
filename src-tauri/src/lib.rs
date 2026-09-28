@@ -1,3 +1,5 @@
+mod desktop_remote;
+mod desktop_remote_log;
 mod app_config;
 mod app_store;
 mod auto_launch;
@@ -1135,6 +1137,8 @@ pub fn run() {
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
             app.manage(commands::CodexRemoteState::default());
+            app.manage(desktop_remote::DesktopRemoteState::default());
+            desktop_remote::restore(app.handle());
 
             // 初始化 SkillService
             let skill_service = SkillService::new();
@@ -1365,6 +1369,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_remote::get_desktop_remote_status,
+            desktop_remote::get_desktop_remote_capabilities,
+            desktop_remote::set_desktop_remote_enabled,
+            desktop_remote::launch_original_codex,
             commands::get_providers,
             commands::get_codex_remote_status,
             commands::get_clawkit_codex_configuration_status,

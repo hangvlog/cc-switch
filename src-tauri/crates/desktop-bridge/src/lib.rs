@@ -3,6 +3,8 @@
 mod catalog;
 mod history;
 mod ipc;
+#[cfg(all(test, unix))]
+mod ipc_tests;
 mod ledger;
 mod version;
 
@@ -19,6 +21,7 @@ pub fn now_ms() -> u64 {
 pub struct Bridge {
     home: PathBuf,
     ledger: ledger::Ledger,
+    enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Bridge {
@@ -29,7 +32,12 @@ impl Bridge {
         Ok(Self {
             home: home.into(),
             ledger: ledger::Ledger::open(storage)?,
+            enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
+    }
+
+    pub fn enable_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
+        self.enabled.clone()
     }
 
     /// Caller serializes requests per device. IDs are opaque and must be echoed unchanged.
@@ -41,7 +49,13 @@ impl Bridge {
         let result = self.dispatch(request["method"].as_str().unwrap_or(""), &request["params"]);
         Some(match result {
             Ok(value) => json!({"id":id,"result":value}),
-            Err(message) => json!({"id":id,"error":{"code":-32001,"message":message}}),
+            Err(message) => {
+                let not_sent = request["method"] == "desktop/turn/start"
+                    && request["params"]["requestId"]
+                        .as_str()
+                        .is_some_and(|id| self.ledger.has_request(id) == Ok(false));
+                json!({"id":id,"error":{"code":-32001,"message":message,"data":{"notSent":not_sent}}})
+            }
         })
     }
 
@@ -149,6 +163,10 @@ impl Bridge {
         if let Some(receipt) = self.ledger.begin(id, thread, text)? {
             return Ok(receipt);
         }
+        if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
+            self.ledger.mark(id, "rejected")?;
+            return self.ledger.read(id, thread);
+        }
         // Once written, any transport or schema error is unknown, never auto-retry.
         let result = client.start_turn(thread, &checked.owner, id, text);
         let status = match result {
@@ -162,8 +180,11 @@ impl Bridge {
         };
         self.ledger.mark(id, status)?;
         if status == "unknown" {
-            if let Ok(snapshot) = client.snapshot(thread, None) {
-                self.reconcile(thread, &snapshot.state)?;
+            // A failed framed read may have consumed a partial frame. Reconnect before reading.
+            if let Ok(mut fresh) = ipc::IpcClient::connect(&self.home) {
+                if let Ok(snapshot) = fresh.snapshot(thread, None) {
+                    self.reconcile(thread, &snapshot.state)?;
+                }
             }
         }
         self.ledger.read(id, thread)

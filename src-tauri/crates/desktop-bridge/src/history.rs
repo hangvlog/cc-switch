@@ -151,6 +151,15 @@ pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
 mod tests {
     use super::*;
     #[test]
+    fn optimistic_user_messages_do_not_confirm_acceptance() {
+        let mut state = json!({"turns":[{"params":{"clientUserMessageId":"r"},"items":[
+            {"type":"steeringUserMessage","id":"r","clientUserMessageId":"r","status":"pending"}]}]});
+        assert!(!contains_request(&state, "r"));
+        state["turns"][0]["items"] =
+            json!([{"type":"userMessage","clientId":"r","id":"server-id"}]);
+        assert!(contains_request(&state, "r"));
+    }
+    #[test]
     fn excludes_internal_content_and_preserves_visible_messages() {
         let state = json!({"id":"t","resumeState":"resumed","requests":[],"threadRuntimeStatus":{"type":"idle"},
             "secret":"must-not-leak","turns":[{"turnId":"turn","status":"completed","items":[
