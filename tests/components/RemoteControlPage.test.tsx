@@ -175,6 +175,7 @@ describe("RemoteControlPage", () => {
     await login();
     expect(mocks.accountLogin).toHaveBeenCalledWith("hang", "secret");
     expect(mocks.configure).not.toHaveBeenCalled();
+    expect(mocks.modelOptions).not.toHaveBeenCalled();
     expect(mocks.enableOwner).not.toHaveBeenCalled();
     expect(mocks.startRemote).not.toHaveBeenCalled();
   });

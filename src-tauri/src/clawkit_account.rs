@@ -133,7 +133,26 @@ impl ClawkitAccountClient {
     }
 
     pub async fn create_socket_ticket(&self) -> Result<Value, String> {
+        self.socket_ticket(false).await
+    }
+
+    pub async fn create_owner_socket_ticket(&self) -> Result<Value, String> {
+        self.socket_ticket(true).await
+    }
+
+    async fn socket_ticket(&self, owner: bool) -> Result<Value, String> {
         let session = self.load_active_session()?;
+        // The optional Codex++ helper has its own independent app-server relay.
+        // A distinct stable device ID prevents it replacing the original-owner socket.
+        let device_id = if owner {
+            use sha2::{Digest, Sha256};
+            format!(
+                "clawkit-owner-{:x}",
+                Sha256::digest(session.device_id.as_bytes())
+            )
+        } else {
+            session.device_id.clone()
+        };
         let response = self
             .client
             .post(format!(
@@ -143,8 +162,8 @@ impl ClawkitAccountClient {
             .bearer_auth(&session.token)
             .json(&json!({
                 "role": "desktop",
-                "device_id": session.device_id,
-                "device_name": DEVICE_NAME,
+                "device_id": device_id,
+                "device_name": if owner {"ClawKit 原桌面"} else {DEVICE_NAME},
             }))
             .send()
             .await
@@ -166,7 +185,7 @@ impl ClawkitAccountClient {
             &self.relay_api_base,
             ticket,
             body.get("expires_at").cloned().unwrap_or(Value::Null),
-            session.device_id,
+            device_id,
         ))
     }
 

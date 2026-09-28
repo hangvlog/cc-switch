@@ -37,6 +37,7 @@ export function RemoteControlPage() {
   const [customEndpoint, setCustomEndpoint] = useState("");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsLoaded, setModelsLoaded] = useState(false);
   const [canRollback, setCanRollback] = useState(false);
   const selectedEndpoint =
     endpointMode === "compatibility"
@@ -58,18 +59,6 @@ export function RemoteControlPage() {
       .status()
       .then((status) => {
         setAccount(status.authenticated ? status : null);
-        if (!status.authenticated) return;
-        setModelsLoading(true);
-        void remoteApi
-          .modelOptions()
-          .then((options) => {
-            setAvailableModels(options.models);
-            setSelectedModel((current) =>
-              options.models.includes(current) ? current : options.defaultModel,
-            );
-          })
-          .catch(() => null)
-          .finally(() => setModelsLoading(false));
       })
       .finally(() => setAccountLoaded(true));
     void remoteApi
@@ -84,6 +73,23 @@ export function RemoteControlPage() {
       })
       .catch(() => null);
   }, [restoreEndpointSelection]);
+
+  const loadModelOptions = async () => {
+    if (!account?.authenticated || modelsLoaded || modelsLoading) return;
+    setModelsLoading(true);
+    try {
+      const options = await remoteApi.modelOptions();
+      setAvailableModels(options.models);
+      setSelectedModel((current) =>
+        options.models.includes(current) ? current : options.defaultModel,
+      );
+      setModelsLoaded(true);
+    } catch (error) {
+      toast.error(extractErrorMessage(error) || "可用模型读取失败");
+    } finally {
+      setModelsLoading(false);
+    }
+  };
 
   const configure = useCallback(
     async (targetAccount = account) => {
@@ -137,11 +143,6 @@ export function RemoteControlPage() {
       const session = await remoteAccountApi.login(username, password);
       setAccount(session);
       toast.success("登录成功，可启用手机远程");
-      const options = await remoteApi.modelOptions().catch(() => null);
-      if (options) {
-        setAvailableModels(options.models);
-        setSelectedModel(options.defaultModel);
-      }
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
@@ -153,6 +154,8 @@ export function RemoteControlPage() {
     await remoteApi.enableOwner(false);
     await remoteAccountApi.logout();
     setAccount(null);
+    setModelsLoaded(false);
+    setAvailableModels([]);
   };
 
   const uploadDiagnostics = async () => {
@@ -197,7 +200,11 @@ export function RemoteControlPage() {
         </Button>
       </div>
       <DesktopConnectionCard />
-      <details>
+      <details
+        onToggle={(event) => {
+          if (event.currentTarget.open) void loadModelOptions();
+        }}
+      >
         <summary className="cursor-pointer text-sm text-muted-foreground">
           可选：使用 ClawKit 模型服务
         </summary>

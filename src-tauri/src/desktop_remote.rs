@@ -87,7 +87,7 @@ impl DesktopRemoteState {
                     break;
                 }
                 phase(&app, &runtime, "connecting");
-                if let Ok(ticket) = account.create_socket_ticket().await {
+                if let Ok(ticket) = account.create_owner_socket_ticket().await {
                     if let Some(url) = ticket["websocketUrl"].as_str() {
                         let result = relay(&app, &runtime, &account, bridge.clone(), url).await;
                         if result.is_ok() {
