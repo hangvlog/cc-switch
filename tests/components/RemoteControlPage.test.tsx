@@ -1,9 +1,4 @@
-import {
-  fireEvent,
-  render,
-  screen,
-  waitFor,
-} from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 
@@ -84,9 +79,13 @@ import {
 
 async function login() {
   await screen.findByLabelText("账号");
-  fireEvent.change(screen.getByLabelText("账号"), {target:{value:"hang"}});
-  fireEvent.change(screen.getByLabelText("密码"), {target:{value:"secret"}});
-  fireEvent.click(screen.getByRole("button",{name:"登录"}));
+  fireEvent.change(screen.getByLabelText("账号"), {
+    target: { value: "hang" },
+  });
+  fireEvent.change(screen.getByLabelText("密码"), {
+    target: { value: "secret" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "登录" }));
   await screen.findByText("手机接续 Codex 原任务");
 }
 
@@ -97,9 +96,15 @@ async function openConfiguration() {
 describe("RemoteControlPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.ownerStatus.mockResolvedValue({enabled:false,phase:"disabled"});
-    mocks.ownerCapabilities.mockResolvedValue({build:"26.924.22138:11645",canSend:true});
-    mocks.enableOwner.mockImplementation(async (enabled:boolean)=>({enabled,phase:enabled?"waiting":"disabled"}));
+    mocks.ownerStatus.mockResolvedValue({ enabled: false, phase: "disabled" });
+    mocks.ownerCapabilities.mockResolvedValue({
+      build: "26.924.22138:11645",
+      canSend: true,
+    });
+    mocks.enableOwner.mockImplementation(async (enabled: boolean) => ({
+      enabled,
+      phase: enabled ? "waiting" : "disabled",
+    }));
     mocks.launchOriginal.mockResolvedValue(undefined);
     Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
@@ -168,7 +173,7 @@ describe("RemoteControlPage", () => {
   it("logs in without rewriting Codex configuration or launching a bridge", async () => {
     render(<RemoteControlPage />);
     await login();
-    expect(mocks.accountLogin).toHaveBeenCalledWith("hang","secret");
+    expect(mocks.accountLogin).toHaveBeenCalledWith("hang", "secret");
     expect(mocks.configure).not.toHaveBeenCalled();
     expect(mocks.enableOwner).not.toHaveBeenCalled();
     expect(mocks.startRemote).not.toHaveBeenCalled();
@@ -176,7 +181,7 @@ describe("RemoteControlPage", () => {
   it("enables native owner remote without model setup and survives navigation", async () => {
     const rendered = render(<RemoteControlPage />);
     await login();
-    fireEvent.click(screen.getByRole("button",{name:"启用手机远程"}));
+    fireEvent.click(screen.getByRole("button", { name: "启用手机远程" }));
     await screen.findByText("等待同账号手机");
     expect(mocks.enableOwner).toHaveBeenCalledWith(true);
     expect(mocks.configure).not.toHaveBeenCalled();
@@ -187,15 +192,19 @@ describe("RemoteControlPage", () => {
   it("stops the native bridge explicitly", async () => {
     render(<RemoteControlPage />);
     await login();
-    fireEvent.click(screen.getByRole("button",{name:"启用手机远程"}));
-    fireEvent.click(await screen.findByRole("button",{name:"停止手机远程"}));
-    await waitFor(()=>expect(mocks.enableOwner).toHaveBeenLastCalledWith(false));
+    fireEvent.click(screen.getByRole("button", { name: "启用手机远程" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "停止手机远程" }),
+    );
+    await waitFor(() =>
+      expect(mocks.enableOwner).toHaveBeenLastCalledWith(false),
+    );
   });
-  it("opens ordinary Codex without the Codex++ launcher",async()=>{
+  it("opens ordinary Codex without the Codex++ launcher", async () => {
     render(<RemoteControlPage />);
     await login();
-    fireEvent.click(screen.getByRole("button",{name:"打开 Codex"}));
-    await waitFor(()=>expect(mocks.launchOriginal).toHaveBeenCalledOnce());
+    fireEvent.click(screen.getByRole("button", { name: "打开 Codex" }));
+    await waitFor(() => expect(mocks.launchOriginal).toHaveBeenCalledOnce());
     expect(mocks.launchPlusPlus).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,3 @@
-mod desktop_remote;
-mod desktop_remote_log;
 mod app_config;
 mod app_store;
 mod auto_launch;
@@ -16,6 +14,8 @@ mod commands;
 mod config;
 mod database;
 mod deeplink;
+mod desktop_remote;
+mod desktop_remote_log;
 mod diagnostic_bundle;
 mod error;
 mod gemini_config;

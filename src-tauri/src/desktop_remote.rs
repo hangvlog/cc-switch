@@ -130,13 +130,16 @@ async fn relay(
     .map_err(|_| ())?;
     phase(app, state, "waiting");
     let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
+    let mut last_received = std::time::Instant::now();
     loop {
         tokio::select! {
             _ = heartbeat.tick() => {
+                if last_received.elapsed()>Duration::from_secs(60) {return Err(());}
                 if account.active_credentials().is_err() { return Ok(()); }
                 socket.send(Message::Ping(Vec::new().into())).await.map_err(|_| ())?;
             }
             message = socket.next() => {
+                last_received=std::time::Instant::now();
                 match message {
                     Some(Ok(Message::Text(raw))) => {
                         let Ok(envelope) = serde_json::from_str::<Value>(&raw) else {continue;};

@@ -36,13 +36,24 @@ export interface DiagnosticBundleUpload {
   expiresInSeconds: number;
 }
 
-export interface DesktopRemoteStatus { enabled: boolean; phase: string; mode?: "desktop-owner"; }
-export interface DesktopCapabilities { build: string | null; canSend: boolean; socketAvailable: boolean; codexHome: string; }
+export interface DesktopRemoteStatus {
+  enabled: boolean;
+  phase: string;
+  mode?: "desktop-owner";
+}
+export interface DesktopCapabilities {
+  build: string | null;
+  canSend: boolean;
+  socketAvailable: boolean;
+  codexHome: string;
+}
 
 export const remoteApi = {
   ownerStatus: () => invoke<DesktopRemoteStatus>("get_desktop_remote_status"),
-  ownerCapabilities: () => invoke<DesktopCapabilities>("get_desktop_remote_capabilities"),
-  enableOwner: (enabled: boolean) => invoke<DesktopRemoteStatus>("set_desktop_remote_enabled", {enabled}),
+  ownerCapabilities: () =>
+    invoke<DesktopCapabilities>("get_desktop_remote_capabilities"),
+  enableOwner: (enabled: boolean) =>
+    invoke<DesktopRemoteStatus>("set_desktop_remote_enabled", { enabled }),
   launchOriginal: () => invoke<void>("launch_original_codex"),
   configurationStatus: () =>
     invoke<ClawkitCodexConfigurationStatus>(

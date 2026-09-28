@@ -1,9 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import {
-  Copy,
-  ExternalLink,
-  UploadCloud,
-} from "lucide-react";
+import { Copy, ExternalLink, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 import { remoteApi } from "@/lib/api/remote";
 import {
@@ -24,7 +20,6 @@ import { DesktopConnectionCard } from "@/components/remote/DesktopConnectionCard
 import { extractErrorMessage } from "@/utils/errorUtils";
 import { copyText } from "@/lib/clipboard";
 import { settingsApi } from "@/lib/api/settings";
-
 
 export function RemoteControlPage() {
   const [account, setAccount] = useState<RemoteAccountStatus | null>(null);
@@ -143,7 +138,10 @@ export function RemoteControlPage() {
       setAccount(session);
       toast.success("登录成功，可启用手机远程");
       const options = await remoteApi.modelOptions().catch(() => null);
-      if (options) { setAvailableModels(options.models); setSelectedModel(options.defaultModel); }
+      if (options) {
+        setAvailableModels(options.models);
+        setSelectedModel(options.defaultModel);
+      }
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
@@ -192,30 +190,37 @@ export function RemoteControlPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-6 pb-8 pt-4">
-      <div className="flex items-center justify-between text-sm"><span>已登录 {displayName}</span><Button variant="ghost" onClick={() => void logout()}>退出登录</Button></div>
+      <div className="flex items-center justify-between text-sm">
+        <span>已登录 {displayName}</span>
+        <Button variant="ghost" onClick={() => void logout()}>
+          退出登录
+        </Button>
+      </div>
       <DesktopConnectionCard />
       <details>
-        <summary className="cursor-pointer text-sm text-muted-foreground">可选：使用 ClawKit 模型服务</summary>
-      <ClawkitConfigurationCard
-        displayName={displayName}
-        configured={configurationReady}
-        configuredModel={configuredModel}
-        configuredEndpoint={configuredEndpoint}
-        selectedModel={selectedModel}
-        selectedEndpoint={selectedEndpoint}
-        endpointMode={endpointMode}
-        customEndpoint={customEndpoint}
-        models={availableModels}
-        busy={configurationBusy}
-        modelsLoading={modelsLoading}
-        canRollback={canRollback}
-        onModelChange={setSelectedModel}
-        onEndpointModeChange={setEndpointMode}
-        onCustomEndpointChange={setCustomEndpoint}
-        onConfigure={() => void configure()}
-        onRollback={() => void rollbackConfiguration()}
-        onLogout={() => void logout()}
-      />
+        <summary className="cursor-pointer text-sm text-muted-foreground">
+          可选：使用 ClawKit 模型服务
+        </summary>
+        <ClawkitConfigurationCard
+          displayName={displayName}
+          configured={configurationReady}
+          configuredModel={configuredModel}
+          configuredEndpoint={configuredEndpoint}
+          selectedModel={selectedModel}
+          selectedEndpoint={selectedEndpoint}
+          endpointMode={endpointMode}
+          customEndpoint={customEndpoint}
+          models={availableModels}
+          busy={configurationBusy}
+          modelsLoading={modelsLoading}
+          canRollback={canRollback}
+          onModelChange={setSelectedModel}
+          onEndpointModeChange={setEndpointMode}
+          onCustomEndpointChange={setCustomEndpoint}
+          onConfigure={() => void configure()}
+          onRollback={() => void rollbackConfiguration()}
+          onLogout={() => void logout()}
+        />
       </details>
       <Card>
         <CardHeader>

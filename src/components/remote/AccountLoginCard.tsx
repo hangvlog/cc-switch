@@ -22,7 +22,8 @@ export function AccountLoginCard({
         </div>
         <CardTitle className="text-lg">登录 ClawKit，连接你的电脑</CardTitle>
         <p className="text-sm leading-6 text-muted-foreground">
-          手机和电脑使用同一账号。登录后启用远程连接，即可查看和接续 Codex 原任务。
+          手机和电脑使用同一账号。登录后启用远程连接，即可查看和接续 Codex
+          原任务。
         </p>
       </CardHeader>
       <CardContent className="space-y-4">
