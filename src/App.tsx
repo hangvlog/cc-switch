@@ -1333,7 +1333,7 @@ function App() {
                       defaultValue: "统一供应商",
                     })}
                   {currentView === "sessions" && t("sessionManager.title")}
-                  {currentView === "remote" && "一键配置 Codex"}
+                  {currentView === "remote" && "连接 Codex 与手机"}
                   {currentView === "workspace" && t("workspace.title")}
                   {currentView === "openclawEnv" && t("openclaw.env.title")}
                   {currentView === "openclawTools" && t("openclaw.tools.title")}
@@ -1749,10 +1749,10 @@ function App() {
                                   size="sm"
                                   onClick={() => setCurrentView("remote")}
                                   className="ml-1 h-8 shrink-0 px-3 shadow-sm"
-                                  title="一键配置 Codex"
+                                  title="连接 Codex 与手机"
                                 >
                                   <Sparkles className="mr-1.5 h-4 w-4" />
-                                  一键配置
+                                  手机接续
                                 </Button>
                               )}
                             </>

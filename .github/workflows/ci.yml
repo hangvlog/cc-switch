@@ -281,7 +281,7 @@ jobs:
         if: inputs.scope == 'desktop-owner'
         run: |
           pnpm typecheck
-          pnpm exec vitest run tests/components/RemoteControlPage.test.tsx
+          pnpm exec vitest run tests/components/RemoteControlPage.test.tsx src/components/remote/CodexQuickSetupHero.test.tsx
           cargo test --locked --manifest-path src-tauri/Cargo.toml --lib desktop_remote
       - name: Build native macOS preview
         if: inputs.scope == 'desktop-owner'

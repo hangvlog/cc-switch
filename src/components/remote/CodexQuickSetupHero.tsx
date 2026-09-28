@@ -23,25 +23,25 @@ export function CodexQuickSetupHero({
               id="codex-quick-setup-title"
               className="text-xl font-semibold tracking-tight"
             >
-              一键配置 Codex
+              用手机接续 Codex
             </h2>
             <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
-              登录 ClawKit 后，自动配置可用模型、API
-              网关和安全连接，无需手动填写 Base URL 或 API Key。
+              登录 ClawKit，启用手机远程，即可在手机上查看和接续电脑里的原任务。
+              模型服务配置为可选项，连接手机无需改动现有 Codex 配置。
             </p>
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground">
             <span className="inline-flex items-center gap-1.5">
               <Check className="h-3.5 w-3.5 text-emerald-500" />
-              自动获取账号模型
+              无需额外配置模型
             </span>
             <span className="inline-flex items-center gap-1.5">
               <Check className="h-3.5 w-3.5 text-emerald-500" />
-              配置完成直接启动
+              启用后自动重连
             </span>
             <span className="inline-flex items-center gap-1.5">
               <ShieldCheck className="h-3.5 w-3.5 text-emerald-500" />
-              保留原配置与登录状态，不修改图标
+              沿用原任务的模型、目录和权限
             </span>
           </div>
         </div>
@@ -50,7 +50,7 @@ export function CodexQuickSetupHero({
           onClick={onConfigure}
           className="h-12 shrink-0 px-6 text-base shadow-md shadow-primary/20"
         >
-          立即一键配置
+          连接 Codex 与手机
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>
