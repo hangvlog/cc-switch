@@ -251,11 +251,13 @@ jobs:
       - name: Test desktop owner contract
         run: cargo test --locked --manifest-path src-tauri/crates/desktop-bridge/Cargo.toml
       - name: Build read-only native probe
-        run: cargo build --locked --release --target aarch64-apple-darwin --manifest-path src-tauri/crates/desktop-bridge/Cargo.toml --bin probe
+        run: cargo build --locked --release --target aarch64-apple-darwin --manifest-path src-tauri/crates/desktop-bridge/Cargo.toml --bin probe --example roundtrip
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-owner-probe
-          path: src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/probe
+          path: |
+            src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/probe
+            src-tauri/crates/desktop-bridge/target/aarch64-apple-darwin/release/examples/roundtrip
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
