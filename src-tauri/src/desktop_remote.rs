@@ -213,6 +213,14 @@ pub fn restore(app: &AppHandle) {
     }
 }
 
+pub fn sign_out(app: &AppHandle) -> Result<(), String> {
+    let state = app.state::<DesktopRemoteState>();
+    state.stop()?;
+    crate::config::atomic_write(&preference(), b"false").map_err(|error| error.to_string())?;
+    phase(app, &state, "disabled");
+    Ok(())
+}
+
 #[tauri::command]
 pub fn launch_original_codex() -> Result<(), String> {
     #[cfg(target_os = "macos")]

@@ -286,14 +286,21 @@ pub fn get_clawkit_account_status() -> Value {
 }
 
 #[tauri::command]
-pub async fn login_clawkit_account(username: String, password: String) -> Result<Value, String> {
-    crate::clawkit_account::ClawkitAccountClient::default()
+pub async fn login_clawkit_account(
+    app: AppHandle,
+    username: String,
+    password: String,
+) -> Result<Value, String> {
+    let status = crate::clawkit_account::ClawkitAccountClient::default()
         .login(&username, &password)
-        .await
+        .await?;
+    crate::desktop_remote::restore(&app);
+    Ok(status)
 }
 
 #[tauri::command]
-pub fn logout_clawkit_account() -> Result<Value, String> {
+pub fn logout_clawkit_account(app: AppHandle) -> Result<Value, String> {
+    crate::desktop_remote::sign_out(&app)?;
     crate::clawkit_account::ClawkitAccountClient::default().logout()
 }
 
