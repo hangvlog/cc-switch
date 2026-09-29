@@ -6,6 +6,7 @@ mod ipc;
 #[cfg(all(test, unix))]
 mod ipc_tests;
 mod ledger;
+mod sidebar;
 mod version;
 
 use serde_json::{json, Value};
