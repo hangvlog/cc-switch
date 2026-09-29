@@ -6,7 +6,7 @@ on:
       scope:
         description: Checks to run
         type: choice
-        options: [all, desktop-owner, desktop-probe]
+        options: [all, desktop-owner, desktop-probe, desktop-database]
         default: all
   pull_request:
     branches: [main]
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   changes:
-    if: inputs.scope != 'desktop-owner' && inputs.scope != 'desktop-probe'
+    if: inputs.scope != 'desktop-owner' && inputs.scope != 'desktop-probe' && inputs.scope != 'desktop-database'
     name: Detect changed areas
     runs-on: ubuntu-latest
     permissions:
@@ -298,3 +298,49 @@ jobs:
           path: |
             ClawKit-Desktop-macOS-preview.zip
             SHA256SUMS
+
+  desktop-database:
+    if: inputs.scope == 'desktop-database'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+      - name: Enable pnpm
+        run: corepack enable && corepack install
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: owner-${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            owner-${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Install locked frontend dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Test database migrations and session cursors
+        run: |
+          mkdir -p dist
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib database::
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib services::session_usage
+      - name: Build native macOS database repair
+        run: |
+          pnpm tauri build --target aarch64-apple-darwin --bundles app --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          codesign --force --deep --sign - "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app"
+          codesign --verify --deep --strict "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app"
+          ditto -c -k --keepParent "src-tauri/target/aarch64-apple-darwin/release/bundle/macos/ClawKit Desktop.app" ClawKit-Desktop-macOS-database-repair.zip
+          shasum -a 256 ClawKit-Desktop-macOS-database-repair.zip > SHA256SUMS
+          git rev-parse HEAD > SOURCE_COMMIT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-database-macos
+          path: |
+            ClawKit-Desktop-macOS-database-repair.zip
+            SHA256SUMS
+            SOURCE_COMMIT
