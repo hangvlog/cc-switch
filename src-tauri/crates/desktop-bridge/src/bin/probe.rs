@@ -12,6 +12,12 @@ fn main() -> Result<(), String> {
     let bridge = Bridge::open(&home, &storage)?;
     let status = bridge.dispatch("desktop/status", &json!({}))?;
     println!("{}", status);
+    #[cfg(target_os="macos")]
+    if std::env::args().nth(1).as_deref() == Some("--creation-preflight") {
+        bridge.creation_preflight()?;
+        println!("Creation UI preflight passed; no navigation or sending performed.");
+        return Ok(());
+    }
     if let Some(thread) = std::env::args().nth(1) {
         let result = bridge.dispatch("desktop/thread/read", &json!({"threadId":thread}))?;
         println!(

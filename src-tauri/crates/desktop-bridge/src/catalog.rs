@@ -2,7 +2,7 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{json, Value};
 use std::path::Path;
 
-fn connection(home: &Path) -> Result<Connection, String> {
+pub(crate) fn connection(home: &Path) -> Result<Connection, String> {
     let database = home.join("state_5.sqlite");
     let connection = Connection::open_with_flags(database, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(|_| "Codex 任务索引尚不存在或版本不兼容")?;

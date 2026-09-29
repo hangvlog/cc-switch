@@ -1,6 +1,11 @@
 //! ClawKit's deliberately small, versioned adapter to an existing Codex desktop.
 //! No app-server fallback, no arbitrary RPC passthrough, no writes to Codex files.
+#[cfg(target_os = "macos")]
+mod accessibility;
 mod catalog;
+mod creation;
+#[cfg(test)]
+mod creation_tests;
 mod history;
 mod ipc;
 #[cfg(all(test, unix))]
@@ -22,6 +27,7 @@ pub fn now_ms() -> u64 {
 pub struct Bridge {
     home: PathBuf,
     ledger: ledger::Ledger,
+    creations: creation::Creations,
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -30,9 +36,11 @@ impl Bridge {
         if !home.is_absolute() {
             return Err("CODEX_HOME 必须是绝对路径".into());
         }
+        let ledger = ledger::Ledger::open(storage)?;
         Ok(Self {
             home: home.into(),
-            ledger: ledger::Ledger::open(storage)?,
+            ledger,
+            creations: creation::Creations::open(storage)?,
             enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
@@ -51,10 +59,14 @@ impl Bridge {
         Some(match result {
             Ok(value) => json!({"id":id,"result":value}),
             Err(message) => {
-                let not_sent = request["method"] == "desktop/turn/start"
+                let not_sent = (request["method"] == "desktop/thread/create"
                     && request["params"]["requestId"]
                         .as_str()
-                        .is_some_and(|id| self.ledger.has_request(id) == Ok(false));
+                        .is_some_and(|id| self.creations.not_sent(id)))
+                    || request["method"] == "desktop/turn/start"
+                        && request["params"]["requestId"]
+                            .as_str()
+                            .is_some_and(|id| self.ledger.has_request(id) == Ok(false));
                 json!({"id":id,"error":{"code":-32001,"message":message,"data":{"notSent":not_sent}}})
             }
         })
@@ -64,7 +76,8 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "newThread":false,"interrupt":false,"approvals":false}})),
+                "newThread":version::can_send(&self.home),"newThreadVia":"desktop-window",
+                "interrupt":false,"approvals":false}})),
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/list" => {
                 let offset = params["cursor"]
@@ -95,6 +108,12 @@ impl Bridge {
                 Ok(json!({"thread":visible}))
             }
             "desktop/turn/start" => self.start(params),
+            "desktop/thread/create" => self.create(params),
+            "desktop/creation/read" => self.creations.read(
+                &self.home,
+                request_id(params)?,
+                params["projectId"].as_str().ok_or("缺少项目 ID")?,
+            ),
             "desktop/dispatch/read" => {
                 let thread = self.thread(params)?;
                 let id = request_id(params)?;
@@ -106,8 +125,65 @@ impl Bridge {
                 }
                 self.ledger.read(id, thread)
             }
-            _ => Err("原桌面接续仅支持读取和空闲任务续聊；此操作不受支持".into()),
+            _ => Err("此操作不受原桌面接续支持".into()),
         }
+    }
+
+    fn create(&self, params: &Value) -> Result<Value, String> {
+        let object = params.as_object().ok_or("新建参数无效")?;
+        if object
+            .keys()
+            .any(|key| !["projectId", "requestId", "text"].contains(&key.as_str()))
+        {
+            return Err("新建仅接受电脑项目和首条消息，模型与权限沿用 Codex 设置".into());
+        }
+        let id = request_id(params)?;
+        let project_id = params["projectId"].as_str().ok_or("请选择电脑项目")?;
+        let text = params["text"]
+            .as_str()
+            .filter(|s| !s.trim().is_empty() && s.len() <= 16000)
+            .ok_or("消息不能为空且最多 16000 字节")?;
+        if self.creations.same(id, project_id, text)? {
+            return self.creations.read(&self.home, id, project_id);
+        }
+        if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("远程连接已关闭，尚未发送".into());
+        }
+        let project = creation::project(&self.home, project_id)?;
+        #[cfg(target_os = "macos")]
+        {
+            let pid = creation::prepare(&self.home)?;
+            self.creations.begin(id, &project, text)?;
+            let attempted = std::cell::Cell::new(false);
+            let result = creation::submit(&self.home, &project, text, pid, &self.enabled, || {
+                attempted.set(true);
+                Ok(())
+            });
+            if let Err(error) = result {
+                if !attempted.get() {
+                    self.creations.reject(id)?;
+                    return Err(error);
+                }
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            loop {
+                let receipt = self.creations.read(&self.home, id, project_id)?;
+                if receipt["status"] == "accepted" || std::time::Instant::now() >= deadline {
+                    return Ok(receipt);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = project;
+            Err("当前系统尚未适配原桌面新建对话".into())
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn creation_preflight(&self) -> Result<(), String> {
+        creation::prepare(&self.home).map(|_| ())
     }
 
     fn thread<'a>(&self, params: &'a Value) -> Result<&'a str, String> {

@@ -5,7 +5,7 @@ use std::path::Path;
 const VERIFIED_BUILD: &str = "26.924.22138:11645";
 
 #[cfg(target_os = "macos")]
-fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn running_pid(home: &Path) -> Option<i32> {
     use std::process::Command;
     let output = Command::new("/usr/sbin/lsof")
         .args(["-a", "-U", "-Fp"])
@@ -17,8 +17,15 @@ fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
     if !pid.chars().all(|c| c.is_ascii_digit()) {
         return None;
     }
+    pid.parse().ok()
+}
+
+#[cfg(target_os = "macos")]
+fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
+    use std::process::Command;
+    let pid = running_pid(home)?;
     let output = Command::new("/bin/ps")
-        .args(["-p", pid, "-o", "comm="])
+        .args(["-p", &pid.to_string(), "-o", "comm="])
         .output()
         .ok()?;
     let executable = String::from_utf8(output.stdout).ok()?;
@@ -27,6 +34,42 @@ fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
         return None;
     }
     Some(contents.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn open_new(home: &Path, project: &str, cwd: &str, text: &str) -> Result<(), String> {
+    if !can_send(home) {
+        return Err("当前 Codex 版本尚未验证新建兼容性".into());
+    }
+    let encode = |value: &str| {
+        value
+            .bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
+                    (b as char).to_string()
+                } else {
+                    format!("%{b:02X}")
+                }
+            })
+            .collect::<String>()
+    };
+    let contents = running_contents(home).ok_or("找不到正在运行的 Codex")?;
+    let status = std::process::Command::new("/usr/bin/open")
+        .arg("-a")
+        .arg(contents.parent().ok_or("Codex 路径无效")?)
+        .arg(format!(
+            "codex://new?mode=codex&projectId={}&path={}&prompt={}",
+            encode(project),
+            encode(cwd),
+            encode(text)
+        ))
+        .status()
+        .map_err(|_| "无法打开 Codex 新建页")?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err("Codex 无法打开新建页".into())
+    }
 }
 
 #[cfg(target_os = "macos")]
