@@ -12,10 +12,20 @@ fn main() -> Result<(), String> {
     let bridge = Bridge::open(&home, &storage)?;
     let status = bridge.dispatch("desktop/status", &json!({}))?;
     println!("{}", status);
-    #[cfg(target_os="macos")]
+    #[cfg(target_os = "macos")]
     if std::env::args().nth(1).as_deref() == Some("--creation-preflight") {
         bridge.creation_preflight()?;
         println!("Creation UI preflight passed; no navigation or sending performed.");
+        return Ok(());
+    }
+    if std::env::args().nth(1).as_deref() == Some("--history") {
+        let thread = std::env::args().nth(2).ok_or("Missing thread ID")?;
+        let start = std::time::Instant::now();
+        let result = bridge.dispatch("desktop/thread/history", &json!({"threadId":thread}))?;
+        println!(
+            "{}",
+            json!({"elapsedMs":start.elapsed().as_millis(), "source":result["thread"]["desktop"]["source"], "items":result["thread"]["turns"].as_array().map(Vec::len),"nextCursor":result["nextCursor"]})
+        );
         return Ok(());
     }
     if let Some(thread) = std::env::args().nth(1) {

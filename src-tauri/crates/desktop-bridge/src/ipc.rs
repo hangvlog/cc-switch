@@ -175,7 +175,14 @@ impl IpcClient {
         result
     }
 
-    /// Only the user-facing read path may load a dormant conversation. Sending and
+    /// Passive discovery never opens a window, and a dormant owner cannot delay history browsing.
+    pub fn passive_snapshot(home: &Path, thread: &str) -> Result<Snapshot, String> {
+        let mut client = Self::connect(home)?;
+        client.timeout = Duration::from_millis(700);
+        client.snapshot(thread, None)
+    }
+
+    /// Only the explicit activation path may load a dormant conversation. Sending and
     /// receipt reconciliation still require an already discovered original owner.
     pub fn open_snapshot(home: &Path, thread: &str) -> Result<Snapshot, String> {
         Self::open_snapshot_with(home, thread, || crate::version::open_thread(home, thread))

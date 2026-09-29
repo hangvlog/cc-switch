@@ -11,6 +11,7 @@ mod ipc;
 #[cfg(all(test, unix))]
 mod ipc_tests;
 mod ledger;
+mod saved_history;
 mod sidebar;
 mod version;
 
@@ -76,7 +77,7 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "newThread":version::can_send(&self.home),"newThreadVia":"desktop-window",
+                "historyPaging":true,"passiveRead":true,"newThread":version::can_send(&self.home),"newThreadVia":"desktop-window",
                 "interrupt":false,"approvals":false}})),
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/list" => {
@@ -90,9 +91,26 @@ impl Bridge {
                 }
                 catalog::list(&self.home, offset)
             }
-            "desktop/thread/read" => {
+            "desktop/thread/history" => saved_history::read(
+                &self.home,
+                self.thread(params)?,
+                params["cursor"].as_str(),
+                params["usersOnly"] == true,
+            ),
+            "desktop/thread/read" | "desktop/thread/activate" => {
                 let thread = self.thread(params)?;
-                let snapshot = ipc::IpcClient::open_snapshot(&self.home, thread)?;
+                let snapshot = if method == "desktop/thread/activate" {
+                    ipc::IpcClient::open_snapshot(&self.home, thread)?
+                } else {
+                    match ipc::IpcClient::passive_snapshot(&self.home, thread) {
+                        Ok(snapshot) => snapshot,
+                        Err(_) => {
+                            return Ok(json!({"thread":{"id":thread,"turns":[],"desktop":{
+                            "source":"history","status":"unknown","canSend":false,"needsActivation":true,
+                            "reason":"发送时会在电脑打开此对话"}}}))
+                        }
+                    }
+                };
                 self.reconcile(thread, &snapshot.state)?;
                 let mut visible =
                     history::visible_thread(&snapshot.state, &snapshot.owner, snapshot.revision);
