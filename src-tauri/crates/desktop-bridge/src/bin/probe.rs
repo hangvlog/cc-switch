@@ -1,4 +1,4 @@
-//! Read-only probe. Intentionally exposes no send command.
+//! History probe. May open a dormant chat in the original desktop; never sends.
 use clawkit_desktop_bridge::Bridge;
 use serde_json::json;
 use std::path::PathBuf;

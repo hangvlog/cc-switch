@@ -5,7 +5,7 @@ use std::path::Path;
 const VERIFIED_BUILD: &str = "26.924.22138:11645";
 
 #[cfg(target_os = "macos")]
-fn running_build(home: &Path) -> Option<String> {
+fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
     use std::process::Command;
     let output = Command::new("/usr/sbin/lsof")
         .args(["-a", "-U", "-Fp"])
@@ -26,6 +26,13 @@ fn running_build(home: &Path) -> Option<String> {
     if contents.file_name()? != "Contents" {
         return None;
     }
+    Some(contents.to_path_buf())
+}
+
+#[cfg(target_os = "macos")]
+fn running_build(home: &Path) -> Option<String> {
+    use std::process::Command;
+    let contents = running_contents(home)?;
     let read = |key: &str| -> Option<String> {
         let value = Command::new("/usr/bin/plutil")
             .args(["-extract", key, "raw", "-o", "-"])
@@ -58,4 +65,35 @@ pub fn status(home: &Path) -> Value {
     json!({"mode":"desktop-owner","build":build,"verifiedBuild":VERIFIED_BUILD,
         "canSend":build.as_deref()==Some(VERIFIED_BUILD),"codexHome":home,
         "socketAvailable":home.join("ipc/ipc.sock").exists()})
+}
+
+/// Ask the installed original desktop to load the conversation through its own
+/// deep link. Never launch an app-server, claim ownership, or change task settings.
+pub fn open_thread(home: &Path, thread: &str) -> Result<(), String> {
+    if uuid::Uuid::parse_str(thread).is_err() {
+        return Err("任务 ID 无效".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        if !can_send(home) {
+            return Err("当前 Codex 版本尚未验证自动打开，请更新 ClawKit".into());
+        }
+        let contents = running_contents(home).ok_or("找不到正在运行的 Codex 桌面")?;
+        let app = contents.parent().ok_or("Codex 应用路径无效")?;
+        let status = std::process::Command::new("/usr/bin/open")
+            .args(["-g", "-a"])
+            .arg(app)
+            .arg(format!("codex://threads/{thread}"))
+            .status()
+            .map_err(|_| "无法请求 Codex 打开原对话")?;
+        if !status.success() {
+            return Err("Codex 无法打开原对话".into());
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = home;
+        Err("当前系统尚未支持自动加载原桌面对话".into())
+    }
 }

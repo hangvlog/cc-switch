@@ -79,8 +79,7 @@ impl Bridge {
             }
             "desktop/thread/read" => {
                 let thread = self.thread(params)?;
-                let mut client = ipc::IpcClient::connect(&self.home)?;
-                let snapshot = client.snapshot(thread, None)?;
+                let snapshot = ipc::IpcClient::open_snapshot(&self.home, thread)?;
                 self.reconcile(thread, &snapshot.state)?;
                 let mut visible =
                     history::visible_thread(&snapshot.state, &snapshot.owner, snapshot.revision);

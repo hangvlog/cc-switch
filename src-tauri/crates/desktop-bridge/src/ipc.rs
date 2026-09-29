@@ -8,7 +8,10 @@ use std::{
 use uuid::Uuid;
 
 const MAX_FRAME: usize = 32 * 1024 * 1024;
-const TIMEOUT: Duration = Duration::from_secs(5);
+// The router waits up to 10 seconds for owner discovery before returning no-client-found.
+const TIMEOUT: Duration = Duration::from_secs(12);
+const NO_OWNER: &str = "Codex IPC: no-client-found";
+const READ_TIMEOUT: &str = "Codex IPC 响应超时";
 
 #[cfg(unix)]
 type Stream = std::os::unix::net::UnixStream;
@@ -18,6 +21,7 @@ type Stream = std::fs::File;
 pub struct IpcClient {
     stream: Stream,
     client_id: String,
+    timeout: Duration,
 }
 
 pub struct Snapshot {
@@ -51,6 +55,7 @@ impl IpcClient {
         let mut client = Self {
             stream,
             client_id: "initializing-client".into(),
+            timeout: TIMEOUT,
         };
         let initialized = client.request(
             "initialize",
@@ -81,11 +86,22 @@ impl IpcClient {
             .map_err(|_| "IPC 写入失败，需核对发送回执".into())
     }
 
-    fn receive(&mut self) -> Result<Value, String> {
+    fn receive(&mut self, deadline: Instant) -> Result<Value, String> {
+        #[cfg(unix)]
+        self.stream
+            .set_read_timeout(Some(
+                deadline
+                    .saturating_duration_since(Instant::now())
+                    .max(Duration::from_millis(1)),
+            ))
+            .map_err(|e| e.to_string())?;
         let mut size = [0; 4];
         self.stream
             .read_exact(&mut size)
-            .map_err(|_| "Codex IPC 响应超时或连接中断")?;
+            .map_err(|error| match error.kind() {
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock => READ_TIMEOUT,
+                _ => "Codex IPC 连接中断",
+            })?;
         let size = u32::from_le_bytes(size) as usize;
         if size == 0 || size > MAX_FRAME {
             return Err("Codex IPC 帧长度不兼容".into());
@@ -121,9 +137,9 @@ impl IpcClient {
             request["targetClientId"] = json!(target);
         }
         self.send(&request)?;
-        let deadline = Instant::now() + TIMEOUT;
+        let deadline = Instant::now() + self.timeout;
         while Instant::now() < deadline {
-            let response = self.receive()?;
+            let response = self.receive(deadline)?;
             self.decline_discovery(&response)?;
             if response["type"] == "response" && response["requestId"] == id {
                 if response["resultType"] != "success" {
@@ -143,6 +159,7 @@ impl IpcClient {
         thread: &str,
         expected_owner: Option<&str>,
     ) -> Result<Snapshot, String> {
+        let deadline = Instant::now() + self.timeout;
         let params = json!({"hostId":"local", "conversationId":thread});
         let discovery = self.request("thread-owner-discovery", params.clone(), 1, None)?;
         let owner = discovery["handledByClientId"]
@@ -153,9 +170,49 @@ impl IpcClient {
             return Err("任务 owner 已变化，请刷新后重试".into());
         }
         self.follow(thread, &owner, true)?;
-        let result = self.wait_snapshot(thread, &owner);
+        let result = self.wait_snapshot(thread, &owner, deadline);
         let _ = self.follow(thread, &owner, false);
         result
+    }
+
+    /// Only the user-facing read path may load a dormant conversation. Sending and
+    /// receipt reconciliation still require an already discovered original owner.
+    pub fn open_snapshot(home: &Path, thread: &str) -> Result<Snapshot, String> {
+        Self::open_snapshot_with(home, thread, || crate::version::open_thread(home, thread))
+    }
+
+    pub(crate) fn open_snapshot_with(
+        home: &Path,
+        thread: &str,
+        open: impl FnOnce() -> Result<(), String>,
+    ) -> Result<Snapshot, String> {
+        match Self::connect(home)?.snapshot(thread, None) {
+            Ok(snapshot) if snapshot.state["resumeState"] == "resumed" => return Ok(snapshot),
+            Ok(_) => {}
+            Err(error) if error == NO_OWNER => {}
+            Err(error) => return Err(error),
+        }
+        open()?;
+        // Reconnect after discovery; a failed framed read must never be reused.
+        // The remaining loading budget keeps the whole read within mobile's 30s RPC.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        for delay_ms in [300, 1000, 2000] {
+            std::thread::sleep(Duration::from_millis(delay_ms));
+            if Instant::now() >= deadline {
+                break;
+            }
+            let mut client = Self::connect(home)?;
+            client.timeout = deadline
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(2));
+            match client.snapshot(thread, None) {
+                Ok(snapshot) if snapshot.state["resumeState"] == "resumed" => return Ok(snapshot),
+                Ok(_) => {}
+                Err(error) if error == NO_OWNER || error == READ_TIMEOUT => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err("Codex 正在加载原对话，请稍后再打开".into())
     }
 
     fn follow(&mut self, thread: &str, owner: &str, following: bool) -> Result<(), String> {
@@ -166,10 +223,14 @@ impl IpcClient {
         )
     }
 
-    fn wait_snapshot(&mut self, thread: &str, owner: &str) -> Result<Snapshot, String> {
-        let deadline = Instant::now() + TIMEOUT;
+    fn wait_snapshot(
+        &mut self,
+        thread: &str,
+        owner: &str,
+        deadline: Instant,
+    ) -> Result<Snapshot, String> {
         while Instant::now() < deadline {
-            let event = self.receive()?;
+            let event = self.receive(deadline)?;
             self.decline_discovery(&event)?;
             if event["method"] != "thread-stream-state-changed"
                 || event["sourceClientId"] != owner
