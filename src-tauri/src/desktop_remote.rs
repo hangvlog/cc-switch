@@ -79,6 +79,26 @@ impl DesktopRemoteState {
         state.phase = "connecting".into();
         let runtime = self.clone();
         state.task = Some(tauri::async_runtime::spawn(async move {
+            let queue_bridge = bridge.clone();
+            let queue_account = ClawkitAccountClient::default();
+            let queue_enabled = state_flag(&queue_bridge);
+            let queue_worker = tauri::async_runtime::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                    if !queue_enabled.load(std::sync::atomic::Ordering::SeqCst)
+                        || queue_account.active_credentials().is_err()
+                    {
+                        break;
+                    }
+                    let bridge = queue_bridge.clone();
+                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                        if let Ok(bridge) = bridge.lock() {
+                            let _ = bridge.drain_queue();
+                        }
+                    })
+                    .await;
+                }
+            });
             let mut delay = 1;
             loop {
                 let account = ClawkitAccountClient::default();
@@ -99,12 +119,17 @@ impl DesktopRemoteState {
                 tokio::time::sleep(Duration::from_secs(delay)).await;
                 delay = (delay * 2).min(30);
             }
+            queue_worker.abort();
             if let Ok(mut state) = runtime.0.lock() {
                 state.enabled = false;
             }
         }));
         Ok(())
     }
+}
+
+fn state_flag(bridge: &Arc<Mutex<Bridge>>) -> Arc<std::sync::atomic::AtomicBool> {
+    bridge.lock().expect("new bridge mutex").enable_flag()
 }
 
 async fn relay(

@@ -3,6 +3,7 @@
 #[cfg(target_os = "macos")]
 mod accessibility;
 mod catalog;
+mod clarification;
 mod creation;
 #[cfg(test)]
 mod creation_tests;
@@ -12,6 +13,8 @@ mod ipc;
 mod ipc_tests;
 mod ledger;
 mod models;
+mod outbox;
+mod queue;
 mod saved_history;
 mod sidebar;
 mod version;
@@ -30,6 +33,7 @@ pub struct Bridge {
     home: PathBuf,
     ledger: ledger::Ledger,
     creations: creation::Creations,
+    queue: queue::Queue,
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -43,6 +47,7 @@ impl Bridge {
             home: home.into(),
             ledger,
             creations: creation::Creations::open(storage)?,
+            queue: queue::Queue::open(storage)?,
             enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
@@ -65,10 +70,25 @@ impl Bridge {
                     && request["params"]["requestId"]
                         .as_str()
                         .is_some_and(|id| self.creations.not_sent(id)))
-                    || request["method"] == "desktop/turn/start"
-                        && request["params"]["requestId"]
-                            .as_str()
-                            .is_some_and(|id| self.ledger.has_request(id) == Ok(false));
+                    || [
+                        "desktop/turn/start",
+                        "desktop/clarification/answer",
+                        "desktop/queue/add",
+                    ]
+                    .iter()
+                    .any(|m| request["method"] == *m)
+                        && request["params"]["requestId"].as_str().is_some_and(|id| {
+                            self.ledger.has_request(id) == Ok(false)
+                                && self
+                                    .queue
+                                    .receipt(
+                                        id,
+                                        request["params"]["threadId"].as_str().unwrap_or(""),
+                                    )
+                                    .ok()
+                                    .flatten()
+                                    .is_none()
+                        });
                 json!({"id":id,"error":{"code":-32001,"message":message,"data":{"notSent":not_sent}}})
             }
         })
@@ -79,7 +99,7 @@ impl Bridge {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "historyPaging":true,"passiveRead":true,"newThread":cfg!(target_os = "macos") && version::can_send(&self.home),"newThreadVia":"desktop-window",
-                "modelSelection":true,"interrupt":false,"approvals":false}})),
+                "modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
             "desktop/model/list" => models::list(&self.home),
             "desktop/thread/model" => {
                 let thread = self.thread(params)?;
@@ -116,7 +136,7 @@ impl Bridge {
                         Ok(snapshot) => snapshot,
                         Err(_) => {
                             return Ok(json!({"thread":{"id":thread,"turns":[],"desktop":{
-                            "source":"history","status":"unknown","canSend":false,"needsActivation":true,
+                            "source":"history","status":"unknown","canSend":false,"needsActivation":true,"queue":self.queue.list(thread)?,
                             "reason":"发送时会在电脑打开此对话"}}}))
                         }
                     }
@@ -133,8 +153,12 @@ impl Bridge {
                     visible["desktop"]["reason"] =
                         json!("上次发送结果未知，请在原桌面核对，不要重新发送");
                 }
+                visible["desktop"]["queue"] = json!(self.queue.list(thread)?);
                 Ok(json!({"thread":visible}))
             }
+            "desktop/queue/add" => self.enqueue(params),
+            "desktop/queue/cancel" => self.cancel_queue(params),
+            "desktop/clarification/answer" => self.answer(params),
             "desktop/turn/start" => self.start(params),
             "desktop/thread/create" => self.create(params),
             "desktop/creation/read" => self.creations.read(
@@ -150,6 +174,9 @@ impl Bridge {
                     if let Ok(snapshot) = client.snapshot(thread, None) {
                         self.reconcile(thread, &snapshot.state)?;
                     }
+                }
+                if let Some(receipt) = self.queue.receipt(id, thread)? {
+                    return Ok(receipt);
                 }
                 self.ledger.read(id, thread)
             }

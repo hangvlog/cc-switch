@@ -8,7 +8,11 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
         });
-    let storage = std::env::temp_dir().join(format!("clawkit-bridge-probe-{}", std::process::id()));
+    let storage = std::env::var_os("CLAWKIT_PROBE_STORAGE")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::temp_dir().join(format!("clawkit-bridge-probe-{}", std::process::id()))
+        });
     let bridge = Bridge::open(&home, &storage)?;
     let status = bridge.dispatch("desktop/status", &json!({}))?;
     println!("{}", status);
@@ -30,6 +34,10 @@ fn main() -> Result<(), String> {
     }
     if std::env::args().nth(1).as_deref() == Some("--models") {
         println!("{}", bridge.dispatch("desktop/model/list", &json!({}))?);
+        return Ok(());
+    }
+    if std::env::args().nth(1).as_deref() == Some("--drain") {
+        bridge.drain_queue()?;
         return Ok(());
     }
     if std::env::args().nth(1).as_deref() == Some("--request") {

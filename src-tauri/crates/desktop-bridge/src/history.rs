@@ -16,15 +16,9 @@ pub fn turns(state: &Value) -> Vec<&Value> {
     state["turns"].as_array().into_iter().flatten().collect()
 }
 
-pub fn send_block_reason(state: &Value) -> Option<&'static str> {
+pub fn conversation_block_reason(state: &Value) -> Option<&'static str> {
     if state["resumeState"] != "resumed" {
         return Some("请先在电脑打开并加载原任务");
-    }
-    if state["requests"]
-        .as_array()
-        .is_none_or(|requests| !requests.is_empty())
-    {
-        return Some("任务正在等待审批或输入，请先在电脑处理");
     }
     if state["source"].is_object() || !state["parentThreadId"].is_null() {
         return Some("子代理任务不能从手机直接发送");
@@ -40,6 +34,19 @@ pub fn send_block_reason(state: &Value) -> Option<&'static str> {
         })
     }) {
         return Some("此版本仅支持本机原任务");
+    }
+    None
+}
+
+pub fn send_block_reason(state: &Value) -> Option<&'static str> {
+    if let Some(reason) = conversation_block_reason(state) {
+        return Some(reason);
+    }
+    if state["requests"]
+        .as_array()
+        .is_none_or(|requests| !requests.is_empty())
+    {
+        return Some("任务正在等待审批或输入，请先在电脑处理");
     }
     let status = state["threadRuntimeStatus"]["type"]
         .as_str()
@@ -144,7 +151,7 @@ pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
         "createdAt":state["createdAt"],"updatedAt":state["updatedAt"],"turns":output,
         "desktop":{"owner":owner,"revision":revision,"source":"live","observedAt":crate::now_ms(),
             "status":state["threadRuntimeStatus"]["type"],"model":state["latestModel"],
-            "canSend":send_block_reason(state).is_none(),"reason":send_block_reason(state)}})
+            "clarifications":crate::clarification::pending(state),"canQueue":conversation_block_reason(state).is_none(),"canSend":send_block_reason(state).is_none(),"reason":send_block_reason(state)}})
 }
 
 #[cfg(test)]
