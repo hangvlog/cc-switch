@@ -189,6 +189,17 @@ impl ClawkitAccountClient {
         ))
     }
 
+    pub fn remote_queue_scope(&self) -> Result<String, String> {
+        use sha2::{Digest, Sha256};
+        let session = self.load_active_session()?;
+        let id = session
+            .user
+            .get("id")
+            .filter(|id| id.is_number() || id.is_string())
+            .ok_or("登录状态缺少账号 ID，请重新登录")?;
+        Ok(format!("{:x}", Sha256::digest(id.to_string().as_bytes())))
+    }
+
     pub fn active_credentials(&self) -> Result<(String, String), String> {
         let session = self.load_active_session()?;
         Ok((session.token, session.device_id))

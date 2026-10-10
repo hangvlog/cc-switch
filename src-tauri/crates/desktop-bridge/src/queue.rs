@@ -7,6 +7,13 @@ use std::path::Path;
 pub struct Queue(Connection);
 impl Queue {
     pub fn open(storage: &Path) -> Result<Self, String> {
+        std::fs::create_dir_all(storage).map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(storage, std::fs::Permissions::from_mode(0o700))
+                .map_err(|e| e.to_string())?;
+        }
         let path = storage.join("remote-queue.sqlite");
         let db = Connection::open(&path).map_err(|e| e.to_string())?;
         db.busy_timeout(std::time::Duration::from_secs(2))

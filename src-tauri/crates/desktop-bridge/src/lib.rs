@@ -39,6 +39,14 @@ pub struct Bridge {
 
 impl Bridge {
     pub fn open(home: &Path, storage: &Path) -> Result<Self, String> {
+        Self::open_with_queue_storage(home, storage, storage)
+    }
+
+    pub fn open_with_queue_storage(
+        home: &Path,
+        storage: &Path,
+        queue_storage: &Path,
+    ) -> Result<Self, String> {
         if !home.is_absolute() {
             return Err("CODEX_HOME 必须是绝对路径".into());
         }
@@ -47,7 +55,7 @@ impl Bridge {
             home: home.into(),
             ledger,
             creations: creation::Creations::open(storage)?,
-            queue: queue::Queue::open(storage)?,
+            queue: queue::Queue::open(queue_storage)?,
             enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }

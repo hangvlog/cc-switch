@@ -72,7 +72,12 @@ impl DesktopRemoteState {
             return Ok(());
         }
         // Validate local storage before claiming remote is enabled.
-        let bridge = Bridge::open(&codex_home(), &storage())?;
+        let queue_scope = ClawkitAccountClient::default().remote_queue_scope()?;
+        let bridge = Bridge::open_with_queue_storage(
+            &codex_home(),
+            &storage(),
+            &storage().join("accounts").join(&queue_scope),
+        )?;
         state.dispatch_enabled = Some(bridge.enable_flag());
         let bridge = Arc::new(Mutex::new(bridge));
         state.enabled = true;
@@ -86,7 +91,8 @@ impl DesktopRemoteState {
                 loop {
                     tokio::time::sleep(Duration::from_secs(3)).await;
                     if !queue_enabled.load(std::sync::atomic::Ordering::SeqCst)
-                        || queue_account.active_credentials().is_err()
+                        || queue_account.remote_queue_scope().ok().as_deref()
+                            != Some(queue_scope.as_str())
                     {
                         break;
                     }
