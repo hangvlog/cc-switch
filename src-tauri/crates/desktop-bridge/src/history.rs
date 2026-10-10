@@ -128,7 +128,7 @@ pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
             }
             let text = bounded_text(&raw, &mut budget);
             items.push(if kind == "agentMessage" {
-                json!({"id":key,"type":"agentMessage","text":text})
+                json!({"id":key,"type":"agentMessage","text":text,"phase":item["phase"]})
             } else {
                 json!({"id":key,"type":"userMessage","content":[{"type":"text","text":text}]})
             });

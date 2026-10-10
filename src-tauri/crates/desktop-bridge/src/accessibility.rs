@@ -171,6 +171,8 @@ impl Window {
                 && !n.value.trim().is_empty()
                 && (send_enabled
                     || ![
+                        "与 Codex 协作",
+                        "Work with Codex",
                         "随心输入",
                         "Ask anything",
                         "使用 ChatGPT Work",

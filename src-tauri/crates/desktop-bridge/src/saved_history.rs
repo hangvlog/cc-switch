@@ -63,7 +63,7 @@ fn visible(event: &Value, thread: &str, offset: u64, end: u64) -> Option<Value> 
     let mut item = if kind == "UserMessage" {
         json!({"id":id,"type":"userMessage","content":[{"type":"text","text":text}]})
     } else {
-        json!({"id":id,"type":"agentMessage","text":text})
+        json!({"id":id,"type":"agentMessage","text":text,"phase":phase})
     };
     item["timestamp"] = event["timestamp"].clone();
     item["historyCursor"] = json!(end.to_string());

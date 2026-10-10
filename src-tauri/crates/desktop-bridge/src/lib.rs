@@ -11,6 +11,7 @@ mod ipc;
 #[cfg(all(test, unix))]
 mod ipc_tests;
 mod ledger;
+mod models;
 mod saved_history;
 mod sidebar;
 mod version;
@@ -77,8 +78,17 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "historyPaging":true,"passiveRead":true,"newThread":version::can_send(&self.home),"newThreadVia":"desktop-window",
-                "interrupt":false,"approvals":false}})),
+                "historyPaging":true,"passiveRead":true,"newThread":cfg!(target_os = "macos") && version::can_send(&self.home),"newThreadVia":"desktop-window",
+                "modelSelection":true,"interrupt":false,"approvals":false}})),
+            "desktop/model/list" => models::list(&self.home),
+            "desktop/thread/model" => {
+                let thread = self.thread(params)?;
+                let model = params["model"]
+                    .as_str()
+                    .filter(|s| !s.is_empty() && s.len() <= 200)
+                    .ok_or("请选择模型")?;
+                models::select(&self.home, thread, model)
+            }
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/list" => {
                 let offset = params["cursor"]
@@ -116,7 +126,7 @@ impl Bridge {
                     history::visible_thread(&snapshot.state, &snapshot.owner, snapshot.revision);
                 if !version::can_send(&self.home) {
                     visible["desktop"]["canSend"] = json!(false);
-                    visible["desktop"]["reason"] = json!("当前 Codex 版本尚未验证发送兼容性");
+                    visible["desktop"]["reason"] = json!("Codex 桌面连接尚未就绪，请重新连接");
                 }
                 if !self.ledger.unresolved(thread)?.is_empty() {
                     visible["desktop"]["canSend"] = json!(false);
@@ -239,7 +249,7 @@ impl Bridge {
             return Ok(receipt);
         }
         if !version::can_send(&self.home) {
-            return Err("当前 Codex 版本或系统尚未验证发送兼容性".into());
+            return Err("Codex 桌面连接尚未就绪，请重新连接".into());
         }
         let mut client = ipc::IpcClient::connect(&self.home)?;
         let initial = client.snapshot(thread, None)?;
@@ -266,11 +276,12 @@ impl Bridge {
         let result = client.start_turn(thread, &checked.owner, id, text);
         let status = match result {
             Ok(response)
-                if response["result"]["result"].is_object()
-                    && !response["result"]["result"]["turn"].is_null() =>
+                if (response["result"]["result"]["turn"].is_object()
+                    || response["result"]["turn"].is_object()) =>
             {
                 "accepted"
             }
+            Err(ref error) if error == "Codex IPC: request-version-mismatch" => "rejected",
             _ => "unknown",
         };
         self.ledger.mark(id, status)?;

@@ -163,7 +163,7 @@ fn hash(text: &str) -> String {
 #[cfg(target_os = "macos")]
 pub fn prepare(home: &Path) -> Result<i32, String> {
     if !crate::version::can_send(home) {
-        return Err("当前电脑系统或 Codex 版本尚不支持新建".into());
+        return Err("Codex 桌面连接尚未就绪，请打开电脑上的 Codex 后重试".into());
     }
     let pid = crate::version::running_pid(home).ok_or("Codex 桌面尚未运行")?;
     if crate::accessibility::Window::read(pid)?.has_draft() {

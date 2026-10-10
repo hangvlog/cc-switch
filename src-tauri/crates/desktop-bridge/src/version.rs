@@ -1,8 +1,8 @@
 use serde_json::{json, Value};
 use std::path::Path;
 
-// Private IPC is not a stable vendor API. Unknown builds remain read-only.
-const VERIFIED_BUILD: &str = "26.924.22138:11645";
+// Build numbers are diagnostic only. Transport, snapshot and operation schemas
+// are checked independently so unrelated desktop updates do not disable access.
 
 #[cfg(target_os = "macos")]
 pub(crate) fn running_pid(home: &Path) -> Option<i32> {
@@ -21,7 +21,7 @@ pub(crate) fn running_pid(home: &Path) -> Option<i32> {
 }
 
 #[cfg(target_os = "macos")]
-fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
+pub(crate) fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
     use std::process::Command;
     let pid = running_pid(home)?;
     let output = Command::new("/bin/ps")
@@ -39,7 +39,7 @@ fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
 #[cfg(target_os = "macos")]
 pub(crate) fn open_new(home: &Path, project: &str, cwd: &str, text: &str) -> Result<(), String> {
     if !can_send(home) {
-        return Err("当前 Codex 版本尚未验证新建兼容性".into());
+        return Err("Codex 桌面连接尚未就绪，请打开电脑上的 Codex 后重试".into());
     }
     let encode = |value: &str| {
         value
@@ -100,13 +100,13 @@ fn running_build(_home: &Path) -> Option<String> {
 }
 
 pub fn can_send(home: &Path) -> bool {
-    running_build(home).as_deref() == Some(VERIFIED_BUILD)
+    crate::ipc::IpcClient::connect(home).is_ok()
 }
 
 pub fn status(home: &Path) -> Value {
     let build = running_build(home);
-    json!({"mode":"desktop-owner","build":build,"verifiedBuild":VERIFIED_BUILD,
-        "canSend":build.as_deref()==Some(VERIFIED_BUILD),"codexHome":home,
+    json!({"mode":"desktop-owner","build":build,"compatibility":"operation-protocol",
+        "canSend":can_send(home),"codexHome":home,
         "socketAvailable":home.join("ipc/ipc.sock").exists()})
 }
 
@@ -119,7 +119,7 @@ pub fn open_thread(home: &Path, thread: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
         if !can_send(home) {
-            return Err("当前 Codex 版本尚未验证自动打开，请更新 ClawKit".into());
+            return Err("Codex 桌面连接尚未就绪，请打开电脑上的 Codex 后重试".into());
         }
         let contents = running_contents(home).ok_or("找不到正在运行的 Codex 桌面")?;
         let app = contents.parent().ok_or("Codex 应用路径无效")?;

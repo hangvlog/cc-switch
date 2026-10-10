@@ -28,6 +28,20 @@ fn main() -> Result<(), String> {
         );
         return Ok(());
     }
+    if std::env::args().nth(1).as_deref() == Some("--models") {
+        println!("{}", bridge.dispatch("desktop/model/list", &json!({}))?);
+        return Ok(());
+    }
+    if std::env::args().nth(1).as_deref() == Some("--request") {
+        use std::io::Read;
+        let mut input = String::new();
+        std::io::stdin()
+            .read_to_string(&mut input)
+            .map_err(|e| e.to_string())?;
+        let request: serde_json::Value = serde_json::from_str(&input).map_err(|e| e.to_string())?;
+        println!("{}", bridge.handle(request).ok_or("Request ID required")?);
+        return Ok(());
+    }
     if let Some(thread) = std::env::args().nth(1) {
         let result = bridge.dispatch("desktop/thread/read", &json!({"threadId":thread}))?;
         println!(
