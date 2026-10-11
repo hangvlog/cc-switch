@@ -22,8 +22,21 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     if !engine.is_file() {
         return Err("此 Codex 安装结构尚未适配，未更改配置".into());
     }
-    let status = Command::new("/usr/bin/open")
-        .arg("-n")
+    let mut command = Command::new("/usr/bin/open");
+    command.arg("-n");
+    // LaunchServices does not inherit the caller's environment. Preserve an
+    // explicitly isolated desktop profile without touching global settings.
+    if let Some(profile) = std::env::var_os("CODEX_ELECTRON_USER_DATA_PATH") {
+        let path = Path::new(&profile);
+        if !path.is_absolute() {
+            return Err("Codex 数据目录必须为绝对路径".into());
+        }
+        command.arg("--env").arg(format!(
+            "CODEX_ELECTRON_USER_DATA_PATH={}",
+            path.display()
+        ));
+    }
+    let status = command
         .arg("--env")
         .arg(format!("CODEX_HOME={}", home.display()))
         .arg("--env")
