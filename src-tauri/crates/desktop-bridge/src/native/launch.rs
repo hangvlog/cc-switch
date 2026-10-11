@@ -26,8 +26,9 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     command.arg("-n");
     // LaunchServices does not inherit the caller's environment. Preserve an
     // explicitly isolated desktop profile without touching global settings.
-    if let Some(profile) = std::env::var_os("CODEX_ELECTRON_USER_DATA_PATH") {
-        let path = Path::new(&profile);
+    let profile = std::env::var_os("CODEX_ELECTRON_USER_DATA_PATH");
+    if let Some(profile) = &profile {
+        let path = Path::new(profile);
         if !path.is_absolute() {
             return Err("Codex 数据目录必须为绝对路径".into());
         }
@@ -36,15 +37,18 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
             path.display()
         ));
     }
-    let status = command
+    command
         .arg("--env")
         .arg(format!("CODEX_HOME={}", home.display()))
         .arg("--env")
         .arg(format!("CODEX_CLI_PATH={}", adapter.display()))
         .arg("--env")
         .arg(format!("CLAWKIT_CODEX_ENGINE={}", engine.display()))
-        .arg(app)
-        .status()
+        .arg(app);
+    if let Some(profile) = profile {
+        command.arg("--args").arg(format!("--user-data-dir={}", Path::new(&profile).display()));
+    }
+    let status = command.status()
         .map_err(|_| "无法启动 Codex")?;
     if status.success() {
         Ok(())
