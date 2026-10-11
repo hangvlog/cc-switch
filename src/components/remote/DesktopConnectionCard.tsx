@@ -67,7 +67,7 @@ export function DesktopConnectionCard() {
       </CardHeader>
       <CardContent className="space-y-4 text-sm">
         <p className="text-muted-foreground">
-          在电脑打开 Codex，启用连接，再用手机登录同一 ClawKit
+          点击“打开 Codex”，启用连接，再用手机登录同一 ClawKit
           账号。沿用原任务的模型、目录和权限，无需配置模型服务。
         </p>
         <div className="flex flex-wrap items-center gap-3">
@@ -102,6 +102,11 @@ export function DesktopConnectionCard() {
           {capabilities?.canSend
             ? "支持空闲任务续聊。"
             : "未验证的版本仅提供读取，发送保持关闭。"}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          {capabilities?.nativeCreation
+            ? "手机可在电脑项目内新建对话，无需辅助功能权限。"
+            : "如需手机新建对话，请先正常退出 Codex，再通过上方“打开 Codex”启动。已有任务不会自动中断。"}
         </p>
         <p className="text-xs text-muted-foreground">
           启用后会记住选择，应用启动时自动连接，切换页面不影响连接。电脑需保持开机、Codex

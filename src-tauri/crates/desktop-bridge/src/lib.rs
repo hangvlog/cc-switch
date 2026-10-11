@@ -1,7 +1,5 @@
 //! ClawKit's deliberately small, versioned adapter to an existing Codex desktop.
-//! No app-server fallback, no arbitrary RPC passthrough, no writes to Codex files.
-#[cfg(target_os = "macos")]
-mod accessibility;
+//! Native creation shares the original initialized engine; no independent engine fallback.
 mod catalog;
 mod clarification;
 mod creation;
@@ -13,6 +11,7 @@ mod ipc;
 mod ipc_tests;
 mod ledger;
 mod models;
+pub mod native;
 mod outbox;
 mod queue;
 mod saved_history;
@@ -33,6 +32,7 @@ pub struct Bridge {
     home: PathBuf,
     ledger: ledger::Ledger,
     creations: creation::Creations,
+    native_creations: native::creation::NativeCreations,
     queue: queue::Queue,
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
@@ -55,6 +55,7 @@ impl Bridge {
             home: home.into(),
             ledger,
             creations: creation::Creations::open(storage)?,
+            native_creations: native::creation::NativeCreations::open(queue_storage)?,
             queue: queue::Queue::open(queue_storage)?,
             enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
@@ -75,9 +76,9 @@ impl Bridge {
             Ok(value) => json!({"id":id,"result":value}),
             Err(message) => {
                 let not_sent = (request["method"] == "desktop/thread/create"
-                    && request["params"]["requestId"]
-                        .as_str()
-                        .is_some_and(|id| self.creations.not_sent(id)))
+                    && request["params"]["requestId"].as_str().is_some_and(|id| {
+                        self.creations.not_sent(id) && self.native_creations.not_sent(id)
+                    }))
                     || [
                         "desktop/turn/start",
                         "desktop/clarification/answer",
@@ -106,7 +107,7 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "historyPaging":true,"passiveRead":true,"newThread":cfg!(target_os = "macos") && version::can_send(&self.home),"newThreadVia":"desktop-window",
+                "historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
                 "modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
             "desktop/model/list" => models::list(&self.home),
             "desktop/thread/model" => {
@@ -169,11 +170,15 @@ impl Bridge {
             "desktop/clarification/answer" => self.answer(params),
             "desktop/turn/start" => self.start(params),
             "desktop/thread/create" => self.create(params),
-            "desktop/creation/read" => self.creations.read(
-                &self.home,
-                request_id(params)?,
-                params["projectId"].as_str().ok_or("缺少项目 ID")?,
-            ),
+            "desktop/creation/read" => {
+                let id = request_id(params)?;
+                let project = params["projectId"].as_str().ok_or("缺少项目 ID")?;
+                if self.native_creations.exists(id) {
+                    self.native_creations.read(&self.home, id, project)
+                } else {
+                    self.creations.read(&self.home, id, project)
+                }
+            }
             "desktop/dispatch/read" => {
                 let thread = self.thread(params)?;
                 let id = request_id(params)?;
@@ -209,44 +214,17 @@ impl Bridge {
         if self.creations.same(id, project_id, text)? {
             return self.creations.read(&self.home, id, project_id);
         }
-        if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("远程连接已关闭，尚未发送".into());
-        }
-        let project = creation::project(&self.home, project_id)?;
-        #[cfg(target_os = "macos")]
-        {
-            let pid = creation::prepare(&self.home)?;
-            self.creations.begin(id, &project, text)?;
-            let attempted = std::cell::Cell::new(false);
-            let result = creation::submit(&self.home, &project, text, pid, &self.enabled, || {
-                attempted.set(true);
-                Ok(())
-            });
-            if let Err(error) = result {
-                if !attempted.get() {
-                    self.creations.reject(id)?;
-                    return Err(error);
-                }
-            }
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-            loop {
-                let receipt = self.creations.read(&self.home, id, project_id)?;
-                if receipt["status"] == "accepted" || std::time::Instant::now() >= deadline {
-                    return Ok(receipt);
-                }
-                std::thread::sleep(std::time::Duration::from_millis(250));
-            }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = project;
-            Err("当前系统尚未适配原桌面新建对话".into())
-        }
+        self.native_creations
+            .create(&self.home, id, project_id, text, &self.enabled)
     }
 
     #[cfg(target_os = "macos")]
     pub fn creation_preflight(&self) -> Result<(), String> {
-        creation::prepare(&self.home).map(|_| ())
+        if native::ready(&self.home) {
+            Ok(())
+        } else {
+            Err("请从 ClawKit 打开 Codex 后再新建".into())
+        }
     }
 
     fn thread<'a>(&self, params: &'a Value) -> Result<&'a str, String> {

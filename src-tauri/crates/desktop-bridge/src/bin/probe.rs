@@ -3,6 +3,7 @@ use clawkit_desktop_bridge::Bridge;
 use serde_json::json;
 use std::path::PathBuf;
 fn main() -> Result<(), String> {
+    clawkit_desktop_bridge::native::maybe_run_adapter();
     let home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

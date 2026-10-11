@@ -11,6 +11,8 @@ pub fn report(phase: &str) {
         "connected" => "desktop_remote_connected",
         "reconnecting" => "desktop_remote_reconnecting",
         "login-required" => "desktop_remote_login_required",
+        "native-launch-requested" => "desktop_native_launch_requested",
+        "native-launch-unavailable" => "desktop_native_launch_unavailable",
         "disabled" => "desktop_remote_disabled",
         _ => return,
     };

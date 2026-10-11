@@ -1,18 +1,23 @@
 //! Project creation through the user's original desktop window, with durable receipts.
-use crate::{catalog, now_ms};
+use crate::catalog;
+#[cfg(test)]
+use crate::now_ms;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{io::Read, path::Path};
+#[cfg(test)]
+use std::io::Read;
+use std::path::Path;
 
 pub struct Creations(Connection);
+#[cfg(test)]
 pub struct Project {
     pub id: String,
     pub legacy_id: String,
-    pub name: String,
     pub cwd: String,
 }
 
+#[cfg(test)]
 pub fn project(home: &Path, id: &str) -> Result<Project, String> {
     uuid::Uuid::parse_str(id).map_err(|_| "项目 ID 无效")?;
     let db = catalog::connection(home)?;
@@ -61,7 +66,6 @@ pub fn project(home: &Path, id: &str) -> Result<Project, String> {
     Ok(Project {
         id: id.into(),
         legacy_id: legacy.into(),
-        name: p["name"].as_str().unwrap_or_default().into(),
         cwd: cwd.into(),
     })
 }
@@ -81,6 +85,7 @@ impl Creations {
     pub fn not_sent(&self, id: &str) -> bool {
         self.0.query_row("SELECT NOT EXISTS(SELECT 1 FROM creations WHERE request_id=?1 AND status!='rejected')",[id],|r| r.get(0)).unwrap_or(false)
     }
+    #[cfg(test)]
     pub fn begin(&self, id: &str, p: &Project, text: &str) -> Result<(), String> {
         self.0
             .execute(
@@ -90,6 +95,7 @@ impl Creations {
             .map_err(|_| "还有一次新建结果未确认，请先核对电脑上的会话")?;
         Ok(())
     }
+    #[cfg(test)]
     pub fn reject(&self, id: &str) -> Result<(), String> {
         self.0
             .execute(
@@ -158,48 +164,4 @@ impl Creations {
 }
 fn hash(text: &str) -> String {
     format!("{:x}", Sha256::digest(text.as_bytes()))
-}
-
-#[cfg(target_os = "macos")]
-pub fn prepare(home: &Path) -> Result<i32, String> {
-    if !crate::version::can_send(home) {
-        return Err("Codex 桌面连接尚未就绪，请打开电脑上的 Codex 后重试".into());
-    }
-    let pid = crate::version::running_pid(home).ok_or("Codex 桌面尚未运行")?;
-    if crate::accessibility::Window::read(pid)?.has_draft() {
-        return Err("电脑当前窗口有未发送草稿，请先处理草稿后再新建；不会覆盖".into());
-    }
-    Ok(pid)
-}
-#[cfg(target_os = "macos")]
-pub fn submit(
-    home: &Path,
-    p: &Project,
-    text: &str,
-    pid: i32,
-    enabled: &std::sync::atomic::AtomicBool,
-    before_press: impl FnOnce() -> Result<(), String>,
-) -> Result<(), String> {
-    crate::version::open_new(home, &p.legacy_id, &p.cwd, text)?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    loop {
-        if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
-            return Err("远程连接已关闭，尚未发送".into());
-        }
-        let window = crate::accessibility::Window::read(pid)?;
-        if window.validate(&p.name, text).is_ok() {
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            return Err("未能确认 Codex 新建页的项目或内容，尚未发送；请查看电脑窗口".into());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(250));
-    }
-    let window = crate::accessibility::Window::read(pid)?;
-    window.validate(&p.name, text)?;
-    if !enabled.load(std::sync::atomic::Ordering::SeqCst) {
-        return Err("远程连接已关闭，尚未发送".into());
-    }
-    before_press()?;
-    window.press_send(&p.name, text)
 }

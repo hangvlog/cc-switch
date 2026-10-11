@@ -37,42 +37,6 @@ pub(crate) fn running_contents(home: &Path) -> Option<std::path::PathBuf> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn open_new(home: &Path, project: &str, cwd: &str, text: &str) -> Result<(), String> {
-    if !can_send(home) {
-        return Err("Codex 桌面连接尚未就绪，请打开电脑上的 Codex 后重试".into());
-    }
-    let encode = |value: &str| {
-        value
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() || b"-._~".contains(&b) {
-                    (b as char).to_string()
-                } else {
-                    format!("%{b:02X}")
-                }
-            })
-            .collect::<String>()
-    };
-    let contents = running_contents(home).ok_or("找不到正在运行的 Codex")?;
-    let status = std::process::Command::new("/usr/bin/open")
-        .arg("-a")
-        .arg(contents.parent().ok_or("Codex 路径无效")?)
-        .arg(format!(
-            "codex://new?mode=codex&projectId={}&path={}&prompt={}",
-            encode(project),
-            encode(cwd),
-            encode(text)
-        ))
-        .status()
-        .map_err(|_| "无法打开 Codex 新建页")?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("Codex 无法打开新建页".into())
-    }
-}
-
-#[cfg(target_os = "macos")]
 fn running_build(home: &Path) -> Option<String> {
     use std::process::Command;
     let contents = running_contents(home)?;
@@ -107,7 +71,7 @@ pub fn status(home: &Path) -> Value {
     let build = running_build(home);
     json!({"mode":"desktop-owner","build":build,"compatibility":"operation-protocol",
         "canSend":can_send(home),"codexHome":home,
-        "socketAvailable":home.join("ipc/ipc.sock").exists()})
+        "socketAvailable":home.join("ipc/ipc.sock").exists(),"nativeCreation":crate::native::ready(home)})
 }
 
 /// Ask the installed original desktop to load the conversation through its own

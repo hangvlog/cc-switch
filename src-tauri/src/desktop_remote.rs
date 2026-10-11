@@ -256,15 +256,14 @@ pub fn sign_out(app: &AppHandle) -> Result<(), String> {
 pub fn launch_original_codex() -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        let app = ["/Applications/ChatGPT.app", "/Applications/Codex.app"]
-            .iter()
-            .find(|path| std::path::Path::new(path).is_dir())
-            .ok_or("请先安装并登录 Codex 桌面端")?;
-        std::process::Command::new("/usr/bin/open")
-            .arg(app)
-            .spawn()
-            .map_err(|_| "无法打开 Codex".to_string())?;
-        Ok(())
+        let adapter = std::env::current_exe().map_err(|_| "无法定位 ClawKit 运行程序")?;
+        let result = clawkit_desktop_bridge::native::launch(&codex_home(), &adapter);
+        crate::desktop_remote_log::report(if result.is_ok() {
+            "native-launch-requested"
+        } else {
+            "native-launch-unavailable"
+        });
+        result
     }
     #[cfg(not(target_os = "macos"))]
     {

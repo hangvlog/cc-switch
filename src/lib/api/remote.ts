@@ -45,6 +45,7 @@ export interface DesktopCapabilities {
   build: string | null;
   canSend: boolean;
   socketAvailable: boolean;
+  nativeCreation?: boolean;
   codexHome: string;
 }
 
