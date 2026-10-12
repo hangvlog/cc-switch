@@ -39,7 +39,12 @@ pub fn pending(state: &Value) -> Vec<Value> {
         .flatten()
         .filter_map(|v| v["questionItemId"].as_str().map(str::to_owned))
         .collect();
-    for turn in all {
+    // Codex only exposes async questions on its latest in-progress turn.
+    // An unanswered historical question must not block the queue or accept replies.
+    if let Some(turn) = all.iter().rev().find(|t| t["status"] == "inProgress") {
+        if turn["turnId"].as_str().is_none_or(str::is_empty) {
+            return result;
+        }
         let items: Vec<_> = turn["items"].as_array().into_iter().flatten().collect();
         for item in items.iter().filter(|i| i["type"] == "agentMessage") {
             let questions:Vec<_>=item["questions"].as_array().into_iter().flatten().enumerate().filter_map(|(n,q)|{
@@ -177,12 +182,20 @@ mod tests {
     use super::*;
     #[test]
     fn projects_sync_and_async_questions_and_filters_answers() {
-        let mut s = json!({"id":"t","requests":[{"id":9,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"q","isOther":false,"options":[{"label":"A"}]}]}}],"turns":[{"turnId":"turn","items":[{"id":"call","type":"agentMessage","questions":[{"question":"Where?","options":[{"label":"Here"}]}]}]}]});
+        let mut s = json!({"id":"t","requests":[{"id":9,"method":"item/tool/requestUserInput","params":{"questions":[{"id":"q","isOther":false,"options":[{"label":"A"}]}]}}],"turns":[{"turnId":"turn","status":"inProgress","items":[{"id":"call","type":"agentMessage","questions":[{"question":"Where?","options":[{"label":"Here"}]}]}]}]});
         let p = pending(&s);
         assert_eq!(p.len(), 2);
         assert_eq!(p[0]["requestId"], 9);
         assert!(validate(&p[0], &json!({"q":{"answers":["invalid"]}})).is_err());
         assert!(validate(&p[0], &json!({"q":{"answers":["A"]}})).is_ok());
+        for status in ["completed", "interrupted", "failed"] {
+            s["turns"][0]["status"] = json!(status);
+            assert_eq!(pending(&s).len(), 1, "ended turn: {status}");
+        }
+        s["turns"].as_array_mut().unwrap().push(json!({"turnId":"next","status":"inProgress","items":[]}));
+        assert_eq!(pending(&s).len(), 1, "new turn cannot revive old questions");
+        s["turns"].as_array_mut().unwrap().pop();
+        s["turns"][0]["status"] = json!("inProgress");
         let reply = json!([{"questionItemId":p[1]["params"]["questions"][0]["id"],"question":"Where?","answer":"Here"}]);
         s["turns"][0]["items"].as_array_mut().unwrap().push(json!({"type":"userMessage","content":[{"type":"text","text":format!("<send_user_message_question_reply>\n{reply}\n</send_user_message_question_reply>")}]}));
         assert_eq!(pending(&s).len(), 1);
