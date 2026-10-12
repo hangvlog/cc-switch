@@ -39,13 +39,22 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
     } else {
         "NULL,NULL,0,NULL"
     };
-    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,t.updated_at,{extra} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY t.updated_at DESC,t.id LIMIT 51 OFFSET ?1");
+    // Recency advances for user activity; updated_at also changes during background
+    // indexing and migration, which must not move old chats to the top of Recents.
+    let activity = if columns.iter().any(|name| name == "recency_at_ms") {
+        "COALESCE(t.recency_at_ms / 1000.0,t.recency_at,t.updated_at)"
+    } else if columns.iter().any(|name| name == "recency_at") {
+        "COALESCE(t.recency_at,t.updated_at)"
+    } else {
+        "t.updated_at"
+    };
+    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY {activity} DESC,t.id LIMIT 51 OFFSET ?1");
     let mut query = connection
         .prepare(&sql)
         .map_err(|_| "Codex 任务索引结构已变化")?;
     let rows = query.query_map([offset as i64],|row| Ok(json!({"id":row.get::<_,String>(0)?,
         "preview":row.get::<_,String>(1)?,"cwd":row.get::<_,String>(2)?,"createdAt":row.get::<_,i64>(3)?,
-        "updatedAt":row.get::<_,i64>(4)?,"name":row.get::<_,Option<String>>(5)?,
+        "updatedAt":row.get::<_,f64>(4)?,"name":row.get::<_,Option<String>>(5)?,
         "projectId":row.get::<_,Option<String>>(6)?,"isPinned":row.get::<_,bool>(7)?,
         "pinnedPosition":row.get::<_,Option<i64>>(8)?,"turns":[],"desktop":{"source":"catalog","status":"unknown","canSend":false}})))
         .map_err(|e| e.to_string())?;
@@ -122,5 +131,15 @@ mod tests {
         assert_eq!(second["data"][9]["isPinned"], true);
         assert_eq!(second["data"][9]["pinnedPosition"], 2);
         assert!(second["nextCursor"].is_null());
+        // Desktop Recents uses recency, not writes from background indexing.
+        db.execute_batch("ALTER TABLE threads ADD COLUMN recency_at INTEGER; ALTER TABLE threads ADD COLUMN recency_at_ms INTEGER;
+            UPDATE threads SET recency_at=updated_at,recency_at_ms=updated_at*1000;
+            UPDATE threads SET updated_at=9999,recency_at=1,recency_at_ms=1000 WHERE id='thread-01';
+            UPDATE threads SET recency_at=100,recency_at_ms=100900 WHERE id='thread-03';
+            UPDATE threads SET recency_at=100,recency_at_ms=100100 WHERE id='thread-04';").unwrap();
+        let recent = list(root.path(), 0).unwrap();
+        assert_eq!(recent["data"][0]["id"], "thread-03");
+        assert_eq!(recent["data"][1]["id"], "thread-04");
+        assert_eq!(recent["data"][0]["updatedAt"], 100.9);
     }
 }
