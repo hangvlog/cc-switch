@@ -59,12 +59,12 @@ impl Bridge {
         let ledger = ledger::Ledger::open(storage)?;
         Ok(Self {
             home: home.into(),
-            search: search::Search::open(storage)?,
             ledger,
             creations: creation::Creations::open(storage)?,
             native_creations: native::creation::NativeCreations::open(queue_storage)?,
             queue: queue::Queue::open(queue_storage)?,
             attachments: attachments::Attachments::open(queue_storage)?,
+            search: search::Search::open(queue_storage)?,
             enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
