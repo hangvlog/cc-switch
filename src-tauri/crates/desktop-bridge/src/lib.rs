@@ -20,6 +20,7 @@ mod queue;
 mod saved_history;
 mod search;
 mod sidebar;
+mod thread_status;
 mod version;
 
 use serde_json::{json, Value};
@@ -115,7 +116,7 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
+                "threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
                 "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":false,"approvals":false}})),
             "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
@@ -130,6 +131,7 @@ impl Bridge {
                 models::select(&self.home, thread, model)
             }
             "desktop/status" => Ok(version::status(&self.home)),
+            "desktop/thread/statuses" => thread_status::read(&self.home, params),
             "desktop/thread/search" => self.search.query(&self.home, params["query"].as_str().ok_or("请输入搜索词")?),
             "desktop/thread/list" => {
                 let offset = params["cursor"]

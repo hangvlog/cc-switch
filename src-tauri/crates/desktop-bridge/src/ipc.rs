@@ -33,6 +33,11 @@ pub struct Snapshot {
 impl IpcClient {
     #[cfg(unix)]
     pub fn connect(home: &Path) -> Result<Self, String> {
+        Self::connect_with_timeout(home, TIMEOUT)
+    }
+
+    #[cfg(unix)]
+    fn connect_with_timeout(home: &Path, timeout: Duration) -> Result<Self, String> {
         #[cfg(unix)]
         let stream = {
             use std::os::unix::fs::{FileTypeExt, MetadataExt};
@@ -45,17 +50,17 @@ impl IpcClient {
             }
             let stream = Stream::connect(path).map_err(|_| "无法连接 Codex 桌面")?;
             stream
-                .set_read_timeout(Some(TIMEOUT))
+                .set_read_timeout(Some(timeout))
                 .map_err(|e| e.to_string())?;
             stream
-                .set_write_timeout(Some(TIMEOUT))
+                .set_write_timeout(Some(timeout))
                 .map_err(|e| e.to_string())?;
             stream
         };
         let mut client = Self {
             stream,
             client_id: "initializing-client".into(),
-            timeout: TIMEOUT,
+            timeout,
         };
         let initialized = client.request(
             "initialize",
@@ -177,6 +182,9 @@ impl IpcClient {
 
     /// Passive discovery never opens a window, and a dormant owner cannot delay history browsing.
     pub fn passive_snapshot(home: &Path, thread: &str) -> Result<Snapshot, String> {
+        #[cfg(unix)]
+        let mut client = Self::connect_with_timeout(home, Duration::from_millis(700))?;
+        #[cfg(not(unix))]
         let mut client = Self::connect(home)?;
         client.timeout = Duration::from_millis(700);
         client.snapshot(thread, None)
