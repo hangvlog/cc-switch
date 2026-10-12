@@ -6,7 +6,7 @@ on:
       scope:
         description: Checks to run
         type: choice
-        options: [all, desktop-owner, desktop-probe, desktop-database]
+        options: [all, desktop-owner, desktop-probe, desktop-database, desktop-account]
         default: all
   pull_request:
     branches: [main]
@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   changes:
-    if: inputs.scope != 'desktop-owner' && inputs.scope != 'desktop-probe' && inputs.scope != 'desktop-database'
+    if: inputs.scope != 'desktop-owner' && inputs.scope != 'desktop-probe' && inputs.scope != 'desktop-database' && inputs.scope != 'desktop-account'
     name: Detect changed areas
     runs-on: ubuntu-latest
     permissions:
@@ -344,3 +344,25 @@ jobs:
             ClawKit-Desktop-macOS-database-repair.zip
             SHA256SUMS
             SOURCE_COMMIT
+
+  desktop-account:
+    if: inputs.scope == 'desktop-account'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: account-${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            account-${{ runner.os }}-cargo-
+            owner-${{ runner.os }}-cargo-
+            ${{ runner.os }}-cargo-
+      - name: Test account session and device identity
+        run: |
+          mkdir -p dist
+          cargo test --locked --manifest-path src-tauri/Cargo.toml --lib clawkit_account::

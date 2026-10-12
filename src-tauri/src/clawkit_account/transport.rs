@@ -123,7 +123,7 @@ mod tests {
     use serde_json::json;
 
     use super::{http_client_builder, post_json_with_bearer_direct_fallback};
-    use crate::clawkit_account::ClawkitAccountClient;
+    use crate::clawkit_account::{ClawkitAccountClient, StoredSession};
 
     #[tokio::test]
     async fn login_retries_directly_when_the_configured_proxy_is_unreachable() {
@@ -165,6 +165,62 @@ mod tests {
         assert_eq!(result["authenticated"], true);
         assert_eq!(result["user"], json!({ "username": "alice" }));
         responder.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn relogin_preserves_device_after_logout_expiry_and_unauthorized_ticket() {
+        for cleanup in ["logout", "expiry", "unauthorized"] {
+            let server = TcpListener::bind("127.0.0.1:0").unwrap();
+            let endpoint = format!("http://{}", server.local_addr().unwrap());
+            let responder = thread::spawn(move || {
+                if cleanup == "unauthorized" {
+                    let (mut stream, _) = server.accept().unwrap();
+                    let _ = stream.read(&mut [0_u8; 4096]);
+                    write!(stream, "HTTP/1.1 401 Unauthorized\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}").unwrap();
+                }
+                let (mut stream, _) = server.accept().unwrap();
+                let _ = stream.read(&mut [0_u8; 4096]);
+                let body = r#"{"code":200,"data":{"token":"new-token","expires_in":3600,"user":{"id":8}}}"#;
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+            });
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("clawkit-account.json");
+            // Write the old-format session directly to exercise upgrade migration.
+            std::fs::write(
+                &path,
+                serde_json::to_vec(&StoredSession {
+                    token: "old-token".into(),
+                    user: json!({ "id": 7 }),
+                    device_id: "clawkit-desktop-existing".into(),
+                    expires_at: if cleanup == "expiry" { 1 } else { u64::MAX },
+                })
+                .unwrap(),
+            )
+            .unwrap();
+            let client = ClawkitAccountClient::with_endpoints(&endpoint, &endpoint, &path).unwrap();
+            match cleanup {
+                "expiry" => assert_eq!(client.status()["authenticated"], false),
+                "unauthorized" => assert!(client.create_owner_socket_ticket().await.is_err()),
+                _ => {
+                    client.logout().unwrap();
+                }
+            }
+            assert!(!path.exists(), "invalid credentials must be removed");
+            // New client models a desktop restart, and login uses another account.
+            let restarted =
+                ClawkitAccountClient::with_endpoints(&endpoint, &endpoint, &path).unwrap();
+            let status = restarted
+                .login("other-account", "test-password")
+                .await
+                .unwrap();
+            responder.join().unwrap();
+            assert_eq!(status["deviceId"], "clawkit-desktop-existing", "{cleanup}");
+            assert_eq!(status["user"]["id"], 8);
+            let stored = std::fs::read_to_string(&path).unwrap();
+            assert!(!stored.contains("old-token"));
+            let identity = std::fs::read_to_string(path.with_extension("device-id")).unwrap();
+            assert_eq!(identity, "clawkit-desktop-existing");
+        }
     }
 
     #[tokio::test]
