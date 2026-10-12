@@ -270,10 +270,15 @@ impl IpcClient {
         thread: &str,
         owner: &str,
         request_id: &str,
-        text: &str,
+        input: Value,
     ) -> Result<Value, String> {
-        self.request("thread-follower-start-turn", json!({"conversationId":thread,
-            "turnStart":{"request":{"threadId":thread,"input":[{"type":"text","text":text,"text_elements":[]}],
-                "clientUserMessageId":request_id},"context":{"inheritThreadSettings":true}}}), 2, Some(owner))
+        self.request(
+            "thread-follower-start-turn",
+            json!({"conversationId":thread,
+            "turnStart":{"request":{"threadId":thread,"input":input,
+                "clientUserMessageId":request_id},"context":{"inheritThreadSettings":true}}}),
+            2,
+            Some(owner),
+        )
     }
 }

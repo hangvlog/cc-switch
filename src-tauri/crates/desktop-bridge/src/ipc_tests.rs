@@ -65,6 +65,10 @@ fn follows_original_owner_and_inherits_settings_without_claiming_ownership() {
             send["params"]["turnStart"]["request"]["clientUserMessageId"],
             "request"
         );
+        assert_eq!(
+            send["params"]["turnStart"]["request"]["input"][1],
+            json!({"type":"localImage","path":"/private/test/image.png"})
+        );
         assert!(send["params"]["turnStart"]["request"]
             .get("model")
             .is_none());
@@ -74,7 +78,12 @@ fn follows_original_owner_and_inherits_settings_without_claiming_ownership() {
     let snapshot = client.snapshot("thread", None).unwrap();
     assert_eq!(snapshot.revision, 4);
     assert!(client
-        .start_turn("thread", &snapshot.owner, "request", "hello")
+        .start_turn(
+            "thread",
+            &snapshot.owner,
+            "request",
+            json!([{"type":"text","text":"hello","text_elements":[]},{"type":"localImage","path":"/private/test/image.png"}])
+        )
         .is_ok());
     server.join().unwrap();
 }

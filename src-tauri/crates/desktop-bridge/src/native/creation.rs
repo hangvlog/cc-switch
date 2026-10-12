@@ -38,6 +38,7 @@ impl NativeCreations {
         id: &str,
         project: &str,
         text: &str,
+        input: Value,
         enabled: &AtomicBool,
     ) -> Result<Value, String> {
         let digest = format!("{:x}", Sha256::digest(text.as_bytes()));
@@ -101,7 +102,7 @@ impl NativeCreations {
                     if let Ok(turn) = super::request(
                         home,
                         "turn/start",
-                        json!({"threadId":thread,"clientUserMessageId":id,"input":[{"type":"text","text":text,"text_elements":[]}]}),
+                        json!({"threadId":thread,"clientUserMessageId":id,"input":input}),
                     ) {
                         if turn["turn"]["id"].is_string() {
                             self.mark(id, "accepted")?;

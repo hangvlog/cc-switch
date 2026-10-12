@@ -125,8 +125,11 @@ pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten()
-                    .filter(|part| part["type"] == "text")
-                    .filter_map(|part| part["text"].as_str())
+                    .filter_map(|part| match part["type"].as_str() {
+                        Some("text") => part["text"].as_str(),
+                        Some("image" | "localImage" | "input_image") => Some("[图片]"),
+                        _ => None,
+                    })
                     .collect::<Vec<_>>()
                     .join("\n")
             };

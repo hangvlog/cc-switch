@@ -1,5 +1,6 @@
 //! ClawKit's deliberately small, versioned adapter to an existing Codex desktop.
 //! Native creation shares the original initialized engine; no independent engine fallback.
+mod attachments;
 mod catalog;
 mod clarification;
 mod creation;
@@ -34,6 +35,7 @@ pub struct Bridge {
     creations: creation::Creations,
     native_creations: native::creation::NativeCreations,
     queue: queue::Queue,
+    attachments: attachments::Attachments,
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -57,6 +59,7 @@ impl Bridge {
             creations: creation::Creations::open(storage)?,
             native_creations: native::creation::NativeCreations::open(queue_storage)?,
             queue: queue::Queue::open(queue_storage)?,
+            attachments: attachments::Attachments::open(queue_storage)?,
             enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         })
     }
@@ -108,7 +111,8 @@ impl Bridge {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
-                "modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
+                "imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
+            "desktop/image/chunk" => self.attachments.chunk(params),
             "desktop/model/list" => models::list(&self.home),
             "desktop/thread/model" => {
                 let thread = self.thread(params)?;
@@ -201,21 +205,20 @@ impl Bridge {
         let object = params.as_object().ok_or("新建参数无效")?;
         if object
             .keys()
-            .any(|key| !["projectId", "requestId", "text"].contains(&key.as_str()))
+            .any(|key| !["projectId", "requestId", "text", "images"].contains(&key.as_str()))
         {
             return Err("新建仅接受电脑项目和首条消息，模型与权限沿用 Codex 设置".into());
         }
         let id = request_id(params)?;
         let project_id = params["projectId"].as_str().ok_or("请选择电脑项目")?;
-        let text = params["text"]
-            .as_str()
-            .filter(|s| !s.trim().is_empty() && s.len() <= 16000)
-            .ok_or("消息不能为空且最多 16000 字节")?;
+        let message = attachments::Message::parse(params)?;
+        let text = &message.identity();
+        let input = self.attachments.input(&message)?;
         if self.creations.same(id, project_id, text)? {
             return self.creations.read(&self.home, id, project_id);
         }
         self.native_creations
-            .create(&self.home, id, project_id, text, &self.enabled)
+            .create(&self.home, id, project_id, text, input, &self.enabled)
     }
 
     #[cfg(target_os = "macos")]
@@ -247,20 +250,19 @@ impl Bridge {
         let object = params.as_object().ok_or("发送参数无效")?;
         if object
             .keys()
-            .any(|key| !["threadId", "requestId", "text"].contains(&key.as_str()))
+            .any(|key| !["threadId", "requestId", "text", "images"].contains(&key.as_str()))
         {
             return Err("续聊不能覆盖原任务的模型、权限或工作目录".into());
         }
         let thread = self.thread(params)?;
         let id = request_id(params)?;
-        let text = params["text"]
-            .as_str()
-            .filter(|text| !text.trim().is_empty() && text.len() <= 16_000)
-            .ok_or("消息不能为空且最多 16000 字节")?;
+        let message = attachments::Message::parse(params)?;
+        let text = &message.identity();
         // Duplicates return their durable receipt even while the desktop is offline/busy.
         if let Some(receipt) = self.ledger.existing(id, thread, text)? {
             return Ok(receipt);
         }
+        let input = self.attachments.input(&message)?;
         if !version::can_send(&self.home) {
             return Err("Codex 桌面连接尚未就绪，请重新连接".into());
         }
@@ -286,7 +288,7 @@ impl Bridge {
             return self.ledger.read(id, thread);
         }
         // Once written, any transport or schema error is unknown, never auto-retry.
-        let result = client.start_turn(thread, &checked.owner, id, text);
+        let result = client.start_turn(thread, &checked.owner, id, input);
         let status = match result {
             Ok(response)
                 if (response["result"]["result"]["turn"].is_object()

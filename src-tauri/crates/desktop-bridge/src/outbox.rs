@@ -4,19 +4,17 @@ impl Bridge {
     pub(crate) fn enqueue(&self, params: &Value) -> Result<Value, String> {
         if params.as_object().is_none_or(|o| {
             o.keys()
-                .any(|k| !["threadId", "requestId", "text"].contains(&k.as_str()))
+                .any(|k| !["threadId", "requestId", "text", "images"].contains(&k.as_str()))
         }) {
             return Err("队列仅接受消息正文".into());
         }
         let thread = self.thread(params)?;
         let id = request_id(params)?;
-        let text = params["text"]
-            .as_str()
-            .filter(|s| !s.trim().is_empty() && s.len() <= 16000)
-            .ok_or("消息不能为空且最多 16000 字节")?;
-        if let Some(old) = self.queue.existing(id, thread, text)? {
+        let message = crate::attachments::Message::parse(params)?;
+        if let Some(old) = self.queue.existing(id, thread, &message.identity())? {
             return Ok(old);
         }
+        self.attachments.input(&message)?;
         if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("远程连接已关闭".into());
         }
@@ -27,7 +25,8 @@ impl Bridge {
         if self.ledger.has_request(id)? {
             return Err("请求编号已用于直接发送".into());
         }
-        self.queue.add(id, thread, text)
+        self.queue
+            .add_images(id, thread, &message.text, &message.images)
     }
     pub(crate) fn cancel_queue(&self, params: &Value) -> Result<Value, String> {
         let thread = self.thread(params)?;
@@ -44,7 +43,7 @@ impl Bridge {
         if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
         }
-        for (id, thread, text) in self.queue.heads()? {
+        for (id, thread, text, images) in self.queue.heads()? {
             let Ok(snap) = IpcClient::passive_snapshot(&self.home, &thread) else {
                 continue;
             };
@@ -75,7 +74,8 @@ impl Bridge {
             {
                 continue;
             }
-            match self.start(&json!({"threadId":thread,"requestId":id,"text":text})) {
+            match self.start(&json!({"threadId":thread,"requestId":id,"text":text,"images":images}))
+            {
                 Ok(r) => self
                     .queue
                     .mark(&id, r["status"].as_str().unwrap_or("unknown"), None)?,

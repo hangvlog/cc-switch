@@ -65,18 +65,32 @@ fn native_creation_is_account_scoped_and_reconciles_only_exact_client_id() {
     let ledger = creation::NativeCreations::open(&storage).unwrap();
     let enabled = AtomicBool::new(true);
     let accepted = ledger
-        .create(home, &id, &project, "synthetic", &enabled)
+        .create(
+            home,
+            &id,
+            &project,
+            "synthetic",
+            json!([{"type":"text","text":"synthetic","text_elements":[]}]),
+            &enabled,
+        )
         .unwrap();
     assert_eq!(accepted["status"], "accepted");
     assert_eq!(accepted["threadId"], thread);
     assert_eq!(
         ledger
-            .create(home, &id, &project, "synthetic", &enabled)
+            .create(
+                home,
+                &id,
+                &project,
+                "synthetic",
+                json!([{"type":"text","text":"synthetic","text_elements":[]}]),
+                &enabled
+            )
             .unwrap(),
         accepted
     );
     assert!(ledger
-        .create(home, &id, &project, "different", &enabled)
+        .create(home, &id, &project, "different", json!([]), &enabled)
         .is_err());
     assert_eq!(create_count.load(Ordering::SeqCst), 1);
     drop(ledger);

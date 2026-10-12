@@ -48,7 +48,15 @@ fn visible(event: &Value, thread: &str, offset: u64, end: u64) -> Option<Value> 
     let raw = content
         .as_array()?
         .iter()
-        .filter_map(|v| v["text"].as_str())
+        .filter_map(|v| {
+            v["text"].as_str().or_else(|| {
+                matches!(
+                    v["type"].as_str(),
+                    Some("image" | "localImage" | "input_image")
+                )
+                .then_some("[图片]")
+            })
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let raw = if raw.is_empty() && kind == "UserMessage" {

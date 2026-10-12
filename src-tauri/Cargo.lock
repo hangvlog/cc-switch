@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch"
-version = "3.19.36"
+version = "3.19.37"
 dependencies = [
  "anyhow",
  "arboard",
@@ -919,6 +919,7 @@ dependencies = [
 name = "clawkit-desktop-bridge"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "libc",
  "rusqlite",
  "serde_json",
