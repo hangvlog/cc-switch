@@ -79,7 +79,12 @@ fn bounded_text(value: &str, budget: &mut usize) -> String {
     text
 }
 
-pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
+pub fn visible_thread(
+    state: &Value,
+    owner: &str,
+    revision: u64,
+    attachments: &crate::attachments::Attachments,
+) -> Value {
     let mut budget = 160_000;
     let mut count = 0;
     let all = turns(state);
@@ -127,7 +132,9 @@ pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
                     .flatten()
                     .filter_map(|part| match part["type"].as_str() {
                         Some("text") => part["text"].as_str(),
-                        Some("image" | "localImage" | "input_image") => Some("[图片]"),
+                        Some("image" | "localImage" | "local_image" | "input_image") => {
+                            Some("[图片]")
+                        }
                         _ => None,
                     })
                     .collect::<Vec<_>>()
@@ -140,7 +147,7 @@ pub fn visible_thread(state: &Value, owner: &str, revision: u64) -> Value {
             items.push(if kind == "agentMessage" {
                 json!({"id":key,"type":"agentMessage","text":text,"phase":item["phase"]})
             } else {
-                json!({"id":key,"type":"userMessage","content":[{"type":"text","text":text}]})
+                json!({"id":key,"type":"userMessage","content":attachments.project_content(item.get("content").or_else(||item.get("input")).unwrap_or(&Value::Null))})
             });
             count += 1;
         }
@@ -177,7 +184,9 @@ mod tests {
                 {"type":"agentMessage","id":"hidden","phase":"analysis","text":"private reasoning"},
                 {"type":"commandExecution","aggregatedOutput":"secret tool output"},
                 {"type":"agentMessage","id":"a","text":"world"}]}]});
-        let result = visible_thread(&state, "owner", 1);
+        let root = tempfile::tempdir().unwrap();
+        let attachments = crate::attachments::Attachments::open(root.path()).unwrap();
+        let result = visible_thread(&state, "owner", 1, &attachments);
         assert_eq!(result["turns"][0]["items"].as_array().unwrap().len(), 2);
         assert!(!result.to_string().contains("secret"));
         assert!(!result.to_string().contains("private reasoning"));

@@ -112,7 +112,8 @@ impl Bridge {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
-                "fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
+                "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
+            "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
             "desktop/file/chunk" => self.attachments.file_chunk(params),
             "desktop/model/list" => models::list(&self.home),
@@ -141,6 +142,7 @@ impl Bridge {
                 self.thread(params)?,
                 params["cursor"].as_str(),
                 params["usersOnly"] == true,
+                &self.attachments,
             ),
             "desktop/thread/read" | "desktop/thread/activate" => {
                 let thread = self.thread(params)?;
@@ -157,8 +159,12 @@ impl Bridge {
                     }
                 };
                 self.reconcile(thread, &snapshot.state)?;
-                let mut visible =
-                    history::visible_thread(&snapshot.state, &snapshot.owner, snapshot.revision);
+                let mut visible = history::visible_thread(
+                    &snapshot.state,
+                    &snapshot.owner,
+                    snapshot.revision,
+                    &self.attachments,
+                );
                 if !version::can_send(&self.home) {
                     visible["desktop"]["canSend"] = json!(false);
                     visible["desktop"]["reason"] = json!("Codex 桌面连接尚未就绪，请重新连接");

@@ -9,7 +9,13 @@ use std::{
 };
 const WINDOW: u64 = 4 * 1024 * 1024;
 
-fn visible(event: &Value, thread: &str, offset: u64, end: u64) -> Option<Value> {
+fn visible(
+    event: &Value,
+    thread: &str,
+    offset: u64,
+    end: u64,
+    attachments: &crate::attachments::Attachments,
+) -> Option<Value> {
     if event["type"] != "event_msg" {
         return None;
     }
@@ -30,7 +36,13 @@ fn visible(event: &Value, thread: &str, offset: u64, end: u64) -> Option<Value> 
             "user_message" => (
                 "UserMessage",
                 format!("saved-{offset}"),
-                json!([{"text":p["message"]}]),
+                {
+                    let mut parts = vec![json!({"type":"text","text":p["message"]})];
+                    for path in p["local_images"].as_array().into_iter().flatten() {
+                        parts.push(json!({"type":"local_image","path":path}));
+                    }
+                    Value::Array(parts)
+                },
                 None,
             ),
             "agent_message" => (
@@ -52,7 +64,7 @@ fn visible(event: &Value, thread: &str, offset: u64, end: u64) -> Option<Value> 
             v["text"].as_str().or_else(|| {
                 matches!(
                     v["type"].as_str(),
-                    Some("image" | "localImage" | "input_image")
+                    Some("image" | "localImage" | "local_image" | "input_image")
                 )
                 .then_some("[图片]")
             })
@@ -69,7 +81,7 @@ fn visible(event: &Value, thread: &str, offset: u64, end: u64) -> Option<Value> 
     }
     let text: String = raw.chars().take(24000).collect();
     let mut item = if kind == "UserMessage" {
-        json!({"id":id,"type":"userMessage","content":[{"type":"text","text":text}]})
+        json!({"id":id,"type":"userMessage","content":attachments.project_content(&content)})
     } else {
         json!({"id":id,"type":"agentMessage","text":text,"phase":phase})
     };
@@ -83,6 +95,7 @@ pub fn read(
     thread: &str,
     cursor: Option<&str>,
     users_only: bool,
+    attachments: &crate::attachments::Attachments,
 ) -> Result<Value, String> {
     catalog::verify_thread(home, thread)?;
     let db = catalog::connection(home)?;
@@ -169,7 +182,7 @@ pub fn read(
         let Ok(event) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
-        if let Some(item) = visible(&event, thread, position, line_end) {
+        if let Some(item) = visible(&event, thread, position, line_end, attachments) {
             if users_only && item["type"] != "userMessage" {
                 continue;
             }
@@ -227,16 +240,24 @@ mod tests {
             params![thread, path.to_str().unwrap()],
         )
         .unwrap();
-        let first = read(root.path(), thread, None, false).unwrap();
+        let attachments = crate::attachments::Attachments::open(root.path()).unwrap();
+        let first = read(root.path(), thread, None, false, &attachments).unwrap();
         assert_eq!(first["thread"]["turns"].as_array().unwrap().len(), 20);
         assert!(!first.to_string().contains("INTERNAL"));
         assert!(!first.to_string().contains("PRIVATE"));
-        let second = read(root.path(), thread, first["nextCursor"].as_str(), true).unwrap();
+        let second = read(
+            root.path(),
+            thread,
+            first["nextCursor"].as_str(),
+            true,
+            &attachments,
+        )
+        .unwrap();
         assert_eq!(second["thread"]["turns"].as_array().unwrap().len(), 5);
         assert!(second["nextCursor"].is_null());
         assert_eq!(first["thread"]["turns"][0]["items"][0]["id"], "u5");
         let cursor = first["thread"]["turns"][0]["items"][0]["historyCursor"].as_str();
-        let around = read(root.path(), thread, cursor, false).unwrap();
+        let around = read(root.path(), thread, cursor, false, &attachments).unwrap();
         assert_eq!(
             around["thread"]["turns"]
                 .as_array()
@@ -245,6 +266,13 @@ mod tests {
                 .unwrap()["items"][0]["id"],
             "u5"
         );
-        assert!(read(root.path(), thread, Some("999999999999"), false).is_err());
+        assert!(read(
+            root.path(),
+            thread,
+            Some("999999999999"),
+            false,
+            &attachments
+        )
+        .is_err());
     }
 }

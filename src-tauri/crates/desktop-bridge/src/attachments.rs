@@ -54,13 +54,13 @@ impl Message {
         }
     }
 }
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 64
         && id
             .bytes()
             .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
 }
-fn valid_image(b: &[u8]) -> bool {
+pub(crate) fn valid_image(b: &[u8]) -> bool {
     (b.starts_with(b"\x89PNG\r\n\x1a\n") && b.len() >= 24)
         || (b.starts_with(&[255, 216, 255]) && b.ends_with(&[255, 217]))
 }
@@ -75,6 +75,95 @@ impl Attachments {
                 .map_err(|e| e.to_string())?;
         }
         Ok(Self(root))
+    }
+    /// Only account-owned uploaded images are exposed; never arbitrary desktop paths.
+    pub fn project_content(&self, content: &Value) -> Vec<Value> {
+        let mut remaining = 24000;
+        let mut images = 0;
+        content
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|part| {
+                if let Some(text) = part["text"].as_str() {
+                    let text = text.chars().take(remaining).collect::<String>();
+                    remaining -= text.chars().count();
+                    return (!text.is_empty()).then(|| json!({"type":"text","text":text}));
+                }
+                if !matches!(
+                    part["type"].as_str(),
+                    Some("image" | "localImage" | "local_image" | "input_image")
+                ) {
+                    return None;
+                }
+                images += 1;
+                if images > 4 {
+                    return None;
+                }
+                let id = part["path"].as_str().and_then(|path| {
+                    let path = Path::new(path);
+                    let id = path.file_name()?.to_str()?;
+                    if !valid_id(id)
+                        || path.canonicalize().ok()? != self.0.join(id).canonicalize().ok()?
+                    {
+                        return None;
+                    }
+                    // A symlink must not widen the account attachment boundary.
+                    if fs::symlink_metadata(self.0.join(id))
+                        .ok()?
+                        .file_type()
+                        .is_symlink()
+                    {
+                        return None;
+                    }
+                    Some(id)
+                });
+                Some(match id {
+                    Some(id) => json!({"type":"image","imageId":id}),
+                    None => json!({"type":"image","unavailable":true}),
+                })
+            })
+            .collect()
+    }
+    pub fn read(&self, p: &Value) -> Result<Value, String> {
+        use std::io::{Read, Seek, SeekFrom};
+        let id = p["imageId"]
+            .as_str()
+            .filter(|id| valid_id(id))
+            .ok_or("图片编号无效")?;
+        let path = self.0.join(id);
+        if fs::symlink_metadata(&path)
+            .map_err(|_| "图片暂不可用")?
+            .file_type()
+            .is_symlink()
+        {
+            return Err("图片不在当前账号中".into());
+        }
+        let mut file = fs::File::open(path).map_err(|_| "图片暂不可用")?;
+        let total = file.metadata().map_err(|_| "图片读取失败")?.len();
+        if total == 0 || total > MAX as u64 {
+            return Err("图片大小无效".into());
+        }
+        let mut header = [0; 8];
+        file.read_exact(&mut header).map_err(|_| "图片格式无效")?;
+        let mime = if header.starts_with(b"\x89PNG\r\n\x1a\n") {
+            "image/png"
+        } else if header.starts_with(&[255, 216, 255]) {
+            "image/jpeg"
+        } else {
+            return Err("图片格式无效".into());
+        };
+        let offset = p["offset"]
+            .as_u64()
+            .filter(|n| *n < total)
+            .ok_or("图片读取偏移无效")?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|_| "图片读取失败")?;
+        let mut bytes = vec![0; (total - offset).min(49152) as usize];
+        file.read_exact(&mut bytes).map_err(|_| "图片读取失败")?;
+        Ok(
+            json!({"imageId":id,"offset":offset + bytes.len() as u64,"total":total,"mimeType":mime,"data":STANDARD.encode(bytes)}),
+        )
     }
     pub fn file_chunk(&self, p: &Value) -> Result<Value, String> {
         crate::file_uploads::chunk(self.0.parent().ok_or("附件目录无效")?, p)
@@ -197,5 +286,34 @@ mod tests {
         assert!(isolated.input(&msg).is_err());
         assert!(Message::parse(&json!({"text":"","images":["../../secret"]})).is_err());
         assert_ne!(msg.identity(), "");
+        let content = store.project_content(&json!([{"type":"local_image","path":d.path().join("images").join(done["imageId"].as_str().unwrap())}]));
+        assert_eq!(content[0]["imageId"], done["imageId"]);
+        assert_eq!(isolated.project_content(&json!([{"type":"local_image","path":d.path().join("images").join(done["imageId"].as_str().unwrap())}]))[0]["unavailable"], true);
+        let request = json!({"imageId":done["imageId"],"offset":0});
+        let read = store.read(&request).unwrap();
+        assert_eq!(
+            STANDARD.decode(read["data"].as_str().unwrap()).unwrap(),
+            bytes
+        );
+        assert_eq!(read["offset"], 24);
+        assert!(isolated.read(&request).is_err());
+        assert!(store
+            .read(&json!({"imageId":"../../private","offset":0}))
+            .is_err());
+        assert!(store
+            .read(&json!({"imageId":done["imageId"],"offset":24}))
+            .is_err());
+        #[cfg(unix)]
+        {
+            let alias = "f".repeat(64);
+            std::os::unix::fs::symlink(
+                d.path()
+                    .join("images")
+                    .join(done["imageId"].as_str().unwrap()),
+                other.path().join("images").join(&alias),
+            )
+            .unwrap();
+            assert!(isolated.read(&json!({"imageId":alias,"offset":0})).is_err());
+        }
     }
 }
