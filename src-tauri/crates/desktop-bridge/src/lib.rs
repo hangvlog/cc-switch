@@ -6,6 +6,7 @@ mod clarification;
 mod creation;
 #[cfg(test)]
 mod creation_tests;
+mod file_uploads;
 mod history;
 mod ipc;
 #[cfg(all(test, unix))]
@@ -111,8 +112,9 @@ impl Bridge {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
-                "imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
+                "fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
             "desktop/image/chunk" => self.attachments.chunk(params),
+            "desktop/file/chunk" => self.attachments.file_chunk(params),
             "desktop/model/list" => models::list(&self.home),
             "desktop/thread/model" => {
                 let thread = self.thread(params)?;
@@ -203,10 +205,9 @@ impl Bridge {
 
     fn create(&self, params: &Value) -> Result<Value, String> {
         let object = params.as_object().ok_or("新建参数无效")?;
-        if object
-            .keys()
-            .any(|key| !["projectId", "requestId", "text", "images"].contains(&key.as_str()))
-        {
+        if object.keys().any(|key| {
+            !["projectId", "requestId", "text", "images", "files"].contains(&key.as_str())
+        }) {
             return Err("新建仅接受电脑项目和首条消息，模型与权限沿用 Codex 设置".into());
         }
         let id = request_id(params)?;
@@ -248,10 +249,9 @@ impl Bridge {
     fn start(&self, params: &Value) -> Result<Value, String> {
         // Reject settings overrides: the original owner's settings are authoritative.
         let object = params.as_object().ok_or("发送参数无效")?;
-        if object
-            .keys()
-            .any(|key| !["threadId", "requestId", "text", "images"].contains(&key.as_str()))
-        {
+        if object.keys().any(|key| {
+            !["threadId", "requestId", "text", "images", "files"].contains(&key.as_str())
+        }) {
             return Err("续聊不能覆盖原任务的模型、权限或工作目录".into());
         }
         let thread = self.thread(params)?;

@@ -9,3 +9,9 @@ Only the primary desktop engine exposes a 0600 Unix socket in a 0700 directory u
 The desktop must be launched from ClawKit to enable this process-scoped connection. An already-running desktop is not terminated: the button explains that the user should finish active work, exit normally, then launch again. Ordinary launch without ClawKit restores the original path. Windows launch is gated off until an equivalent secure transport is verified.
 
 Validation: bridge unit tests; isolated real Codex engine with synthetic Responses endpoint verifies native creation, project assignment, desktop first-turn events, duplicate suppression, desktop continuation and durable receipts after engine/bridge restart. Main desktop UI and packaged client acceptance are recorded separately in the parent release document. No new runtime dependency is required.
+
+## Mobile document attachments
+
+The bridge advertises fileAttachments and accepts desktop/file/chunk. Documents are stored under the authenticated account storage, with bounded uploads, immutable content/name IDs, private filesystem permissions, retry checks and a 256 MiB quota. Only uploaded IDs may be submitted. New/continued/queued messages carry document references; the official engine receives original filenames and local paths in a text input and reads them using its existing tools and permissions. Images keep their localImage contract. Queue migration adds files with an empty default, retains references over restart and includes them in request identity.
+
+Validation: 18 bridge tests passed, including document bytes/retries/scope/path checks and persisted file queue references. Isolated official engine creation, input reception, duplicate suppression, continuation and restart receipt checks pass. Native application and release acceptance remain separate.

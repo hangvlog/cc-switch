@@ -35,6 +35,20 @@ impl Queue {
             )
             .map_err(|e| e.to_string())?;
         }
+        let has_files = db
+            .prepare("PRAGMA table_info(queue)")
+            .map_err(|e| e.to_string())?
+            .query_map([], |r| r.get::<_, String>(1))
+            .map_err(|e| e.to_string())?
+            .filter_map(Result::ok)
+            .any(|name| name == "files");
+        if !has_files {
+            db.execute(
+                "ALTER TABLE queue ADD COLUMN files TEXT NOT NULL DEFAULT '[]'",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -61,18 +75,20 @@ impl Queue {
     }
     #[cfg(test)]
     pub fn add(&self, id: &str, thread: &str, text: &str) -> Result<Value, String> {
-        self.add_images(id, thread, text, &[])
+        self.add_attachments(id, thread, text, &[], &[])
     }
-    pub fn add_images(
+    pub fn add_attachments(
         &self,
         id: &str,
         thread: &str,
         text: &str,
         images: &[String],
+        files: &[String],
     ) -> Result<Value, String> {
         let identity = crate::attachments::Message {
             text: text.into(),
             images: images.into(),
+            files: files.into(),
         }
         .identity();
         if let Some(old) = self.existing(id, thread, &identity)? {
@@ -91,14 +107,15 @@ impl Queue {
         }
         self.0
             .execute(
-                "INSERT INTO queue (id,thread,text,hash,status,created,reason,images) VALUES (?1,?2,?3,?4,'queued',?5,NULL,?6)",
+                "INSERT INTO queue (id,thread,text,hash,status,created,reason,images,files) VALUES (?1,?2,?3,?4,'queued',?5,NULL,?6,?7)",
                 params![
                     id,
                     thread,
                     text,
                     format!("{:x}", Sha256::digest(identity.as_bytes())),
                     crate::now_ms(),
-                    json!(images).to_string()
+                    json!(images).to_string(),
+                    json!(files).to_string()
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -108,13 +125,13 @@ impl Queue {
         self.0.query_row("SELECT status,reason FROM queue WHERE id=?1 AND thread=?2",params![id,thread],|r|Ok(json!({"requestId":id,"threadId":thread,"status":r.get::<_,String>(0)?,"reason":r.get::<_,Option<String>>(1)?}))).optional().map_err(|e|e.to_string())
     }
     pub fn list(&self, thread: &str) -> Result<Vec<Value>, String> {
-        let mut q=self.0.prepare("SELECT id,text,status,reason,images FROM queue WHERE thread=?1 AND status IN ('queued','unknown','rejected') ORDER BY created,rowid").map_err(|e|e.to_string())?;
-        let rows=q.query_map([thread],|r|Ok(json!({"id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"imageCount":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(4)?).unwrap_or_default().len(),"status":r.get::<_,String>(2)?,"reason":r.get::<_,Option<String>>(3)?}))).map_err(|e|e.to_string())?;
+        let mut q=self.0.prepare("SELECT id,text,status,reason,images,files FROM queue WHERE thread=?1 AND status IN ('queued','unknown','rejected') ORDER BY created,rowid").map_err(|e|e.to_string())?;
+        let rows=q.query_map([thread],|r|Ok(json!({"id":r.get::<_,String>(0)?,"text":r.get::<_,String>(1)?,"fileCount":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(5)?).unwrap_or_default().len(),"imageCount":serde_json::from_str::<Vec<String>>(&r.get::<_,String>(4)?).unwrap_or_default().len(),"status":r.get::<_,String>(2)?,"reason":r.get::<_,Option<String>>(3)?}))).map_err(|e|e.to_string())?;
         rows.collect::<Result<Vec<_>, _>>()
             .map_err(|e| e.to_string())
     }
-    pub fn heads(&self) -> Result<Vec<(String, String, String, Vec<String>)>, String> {
-        let mut q=self.0.prepare("SELECT id,thread,text,images FROM queue q WHERE status IN ('queued','unknown') AND NOT EXISTS (SELECT 1 FROM queue p WHERE p.thread=q.thread AND p.status IN ('queued','unknown','rejected') AND p.rowid<q.rowid) ORDER BY rowid LIMIT 10").map_err(|e|e.to_string())?;
+    pub fn heads(&self) -> Result<Vec<(String, String, String, Vec<String>, Vec<String>)>, String> {
+        let mut q=self.0.prepare("SELECT id,thread,text,images,files FROM queue q WHERE status IN ('queued','unknown') AND NOT EXISTS (SELECT 1 FROM queue p WHERE p.thread=q.thread AND p.status IN ('queued','unknown','rejected') AND p.rowid<q.rowid) ORDER BY rowid LIMIT 10").map_err(|e|e.to_string())?;
         let rows = q
             .query_map([], |r| {
                 Ok((
@@ -122,6 +139,7 @@ impl Queue {
                     r.get(1)?,
                     r.get(2)?,
                     serde_json::from_str(&r.get::<_, String>(3)?).unwrap_or_default(),
+                    serde_json::from_str(&r.get::<_, String>(4)?).unwrap_or_default(),
                 ))
             })
             .map_err(|e| e.to_string())?;
@@ -129,7 +147,7 @@ impl Queue {
             .map_err(|e| e.to_string())
     }
     pub fn mark(&self, id: &str, status: &str, reason: Option<&str>) -> Result<(), String> {
-        self.0.execute("UPDATE queue SET status=?2,reason=?3,text=CASE WHEN ?2 IN ('accepted','cancelled') THEN '' ELSE text END,images=CASE WHEN ?2 IN ('accepted','cancelled') THEN '[]' ELSE images END WHERE id=?1",params![id,status,reason]).map_err(|e|e.to_string())?;
+        self.0.execute("UPDATE queue SET status=?2,reason=?3,text=CASE WHEN ?2 IN ('accepted','cancelled') THEN '' ELSE text END,images=CASE WHEN ?2 IN ('accepted','cancelled') THEN '[]' ELSE images END,files=CASE WHEN ?2 IN ('accepted','cancelled') THEN '[]' ELSE files END WHERE id=?1",params![id,status,reason]).map_err(|e|e.to_string())?;
         Ok(())
     }
     pub fn cancel(&self, id: &str, thread: &str) -> Result<Value, String> {
@@ -153,7 +171,8 @@ mod tests {
         let q = Queue::open(d.path()).unwrap();
         q.add("1", "t", "first").unwrap();
         let images = vec!["a".repeat(64)];
-        q.add_images("2", "t", "second", &images).unwrap();
+        q.add_attachments("2", "t", "second", &images, &["b".repeat(64)])
+            .unwrap();
         q.add("1", "t", "first").unwrap();
         assert!(q.add("1", "t", "changed").is_err());
         assert_eq!(q.list("t").unwrap().len(), 2);
@@ -165,6 +184,8 @@ mod tests {
         q.mark("1", "accepted", None).unwrap();
         assert_eq!(q.heads().unwrap()[0].0, "2");
         assert_eq!(q.heads().unwrap()[0].3, images);
+        assert_eq!(q.heads().unwrap()[0].4, vec!["b".repeat(64)]);
+        assert_eq!(q.list("t").unwrap()[0]["fileCount"], 1);
         assert_eq!(q.list("t").unwrap()[0]["imageCount"], 1);
         q.cancel("2", "t").unwrap();
         assert!(q.heads().unwrap().is_empty());

@@ -3,8 +3,9 @@ use serde_json::{json, Value};
 impl Bridge {
     pub(crate) fn enqueue(&self, params: &Value) -> Result<Value, String> {
         if params.as_object().is_none_or(|o| {
-            o.keys()
-                .any(|k| !["threadId", "requestId", "text", "images"].contains(&k.as_str()))
+            o.keys().any(|k| {
+                !["threadId", "requestId", "text", "images", "files"].contains(&k.as_str())
+            })
         }) {
             return Err("队列仅接受消息正文".into());
         }
@@ -26,7 +27,7 @@ impl Bridge {
             return Err("请求编号已用于直接发送".into());
         }
         self.queue
-            .add_images(id, thread, &message.text, &message.images)
+            .add_attachments(id, thread, &message.text, &message.images, &message.files)
     }
     pub(crate) fn cancel_queue(&self, params: &Value) -> Result<Value, String> {
         let thread = self.thread(params)?;
@@ -43,7 +44,7 @@ impl Bridge {
         if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
             return Ok(());
         }
-        for (id, thread, text, images) in self.queue.heads()? {
+        for (id, thread, text, images, files) in self.queue.heads()? {
             let Ok(snap) = IpcClient::passive_snapshot(&self.home, &thread) else {
                 continue;
             };
@@ -74,7 +75,7 @@ impl Bridge {
             {
                 continue;
             }
-            match self.start(&json!({"threadId":thread,"requestId":id,"text":text,"images":images}))
+            match self.start(&json!({"threadId":thread,"requestId":id,"text":text,"images":images,"files":files}))
             {
                 Ok(r) => self
                     .queue

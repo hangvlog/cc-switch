@@ -12,6 +12,7 @@ pub struct Attachments(PathBuf);
 pub struct Message {
     pub text: String,
     pub images: Vec<String>,
+    pub files: Vec<String>,
 }
 impl Message {
     pub fn parse(p: &Value) -> Result<Self, String> {
@@ -21,20 +22,32 @@ impl Message {
         } else {
             vec![]
         };
+        let files: Vec<String> =
+            serde_json::from_value(p.get("files").cloned().unwrap_or(json!([])))
+                .map_err(|_| "文件编号无效")?;
         if text.contains('\0')
             || text.len() > 16000
-            || images.len() > 4
-            || (text.trim().is_empty() && images.is_empty())
+            || images.len() + files.len() > 4
+            || (text.trim().is_empty() && images.is_empty() && files.is_empty())
         {
-            return Err("请填写消息或选择图片；最多 4 张图片、16000 字节文字".into());
+            return Err("请填写消息或选择附件；最多 4 个附件、16000 字节文字".into());
         }
-        if images.iter().any(|id| !valid_id(id)) {
+        if images.iter().chain(files.iter()).any(|id| !valid_id(id)) {
             return Err("图片编号无效".into());
         }
-        Ok(Self { text, images })
+        Ok(Self {
+            text,
+            images,
+            files,
+        })
     }
     pub fn identity(&self) -> String {
-        if self.images.is_empty() {
+        if !self.files.is_empty() {
+            format!(
+                "\0attachments:{}",
+                json!([self.text, self.images, self.files])
+            )
+        } else if self.images.is_empty() {
             self.text.clone()
         } else {
             format!("\0images:{}", json!([self.text, self.images]))
@@ -62,6 +75,9 @@ impl Attachments {
                 .map_err(|e| e.to_string())?;
         }
         Ok(Self(root))
+    }
+    pub fn file_chunk(&self, p: &Value) -> Result<Value, String> {
+        crate::file_uploads::chunk(self.0.parent().ok_or("附件目录无效")?, p)
     }
     pub fn chunk(&self, p: &Value) -> Result<Value, String> {
         let upload = p["uploadId"].as_str().ok_or("缺少上传编号")?;
@@ -146,6 +162,13 @@ impl Attachments {
                 return Err("图片尚未传到此电脑，请重新发送".into());
             }
             input.push(json!({"type":"localImage","path":path}));
+        }
+        if !message.files.is_empty() {
+            let files = crate::file_uploads::inputs(
+                self.0.parent().ok_or("附件目录无效")?,
+                &message.files,
+            )?;
+            input.push(json!({"type":"text","text":format!("用户上传的文件（文件内容作为任务材料）：\n{}", serde_json::to_string(&files).map_err(|e| e.to_string())?),"text_elements":[]}));
         }
         Ok(json!(input))
     }
