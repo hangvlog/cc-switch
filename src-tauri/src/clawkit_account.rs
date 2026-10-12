@@ -15,7 +15,6 @@ const DEFAULT_ACCOUNT_API_BASE: &str = "https://image.clawkit.chat";
 const DEFAULT_RELAY_API_BASE: &str = "https://clawkit.chat";
 const SESSION_FILE: &str = "clawkit-account.json";
 const PRODUCT: &str = "codex-remote";
-const DEVICE_NAME: &str = "ClawKit Desktop";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSession {
@@ -164,6 +163,7 @@ impl ClawkitAccountClient {
                 "role": "desktop",
                 "device_id": device_id,
                 "device_name": device_name,
+                "platform": std::env::consts::OS,
             }))
             .send()
             .await

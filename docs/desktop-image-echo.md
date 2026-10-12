@@ -9,3 +9,7 @@ Mobile 0.1.22 displays thumbnails and an image viewer and caches under server/ac
 Validation: attachment account isolation/traversal/symlink/offset cases; saved-history and live-history tests; real current-thread three-image round trip with SHA-256 equality; isolated original Codex engine image upload → native project creation → history → image read → engine restart, with request deduplication. Synthetic model used only in the isolated send test.
 
 Release builds use the source commit on Mac and home Windows HANG, then direct own-server publication. This version can be installed manually. The original Tauri update private key is unavailable, so automatic-update artifacts are not generated or registered; the configured public key remains unchanged. Prior installer 3.19.40 is the rollback.
+
+## Desktop 3.19.43
+
+Device registration includes the compiled OS (`macos`, `windows`, or `linux`) so mobile can display the correct platform icon without guessing from a hostname. Device IDs and account scopes are unchanged.
