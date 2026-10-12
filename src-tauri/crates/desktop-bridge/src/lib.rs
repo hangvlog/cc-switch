@@ -4,6 +4,7 @@ mod attachments;
 mod catalog;
 mod clarification;
 mod creation;
+mod dispatch;
 #[cfg(test)]
 mod creation_tests;
 mod file_uploads;
@@ -112,7 +113,7 @@ impl Bridge {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
-                "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"interrupt":false,"approvals":false}})),
+                "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":false,"approvals":false}})),
             "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
             "desktop/file/chunk" => self.attachments.file_chunk(params),
@@ -167,10 +168,12 @@ impl Bridge {
                 );
                 if !version::can_send(&self.home) {
                     visible["desktop"]["canSend"] = json!(false);
+                    visible["desktop"]["canSteer"] = json!(false);
                     visible["desktop"]["reason"] = json!("Codex 桌面连接尚未就绪，请重新连接");
                 }
                 if !self.ledger.unresolved(thread)?.is_empty() {
                     visible["desktop"]["canSend"] = json!(false);
+                    visible["desktop"]["canSteer"] = json!(false);
                     visible["desktop"]["reason"] =
                         json!("上次发送结果未知，请在原桌面核对，不要重新发送");
                 }
@@ -252,70 +255,7 @@ impl Bridge {
         Ok(())
     }
 
-    fn start(&self, params: &Value) -> Result<Value, String> {
-        // Reject settings overrides: the original owner's settings are authoritative.
-        let object = params.as_object().ok_or("发送参数无效")?;
-        if object.keys().any(|key| {
-            !["threadId", "requestId", "text", "images", "files"].contains(&key.as_str())
-        }) {
-            return Err("续聊不能覆盖原任务的模型、权限或工作目录".into());
-        }
-        let thread = self.thread(params)?;
-        let id = request_id(params)?;
-        let message = attachments::Message::parse(params)?;
-        let text = &message.identity();
-        // Duplicates return their durable receipt even while the desktop is offline/busy.
-        if let Some(receipt) = self.ledger.existing(id, thread, text)? {
-            return Ok(receipt);
-        }
-        let input = self.attachments.input(&message)?;
-        if !version::can_send(&self.home) {
-            return Err("Codex 桌面连接尚未就绪，请重新连接".into());
-        }
-        let mut client = ipc::IpcClient::connect(&self.home)?;
-        let initial = client.snapshot(thread, None)?;
-        self.reconcile(thread, &initial.state)?;
-        if let Some(reason) = history::send_block_reason(&initial.state) {
-            return Err(reason.into());
-        }
-        let checked = client.snapshot(thread, Some(&initial.owner))?;
-        if let Some(reason) = history::send_block_reason(&checked.state) {
-            return Err(reason.into());
-        }
-        // A fresh follower subscription increments revision even when state is identical.
-        if checked.state != initial.state {
-            return Err("原任务刚刚更新，请刷新后发送".into());
-        }
-        if let Some(receipt) = self.ledger.begin(id, thread, text)? {
-            return Ok(receipt);
-        }
-        if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
-            self.ledger.mark(id, "rejected")?;
-            return self.ledger.read(id, thread);
-        }
-        // Once written, any transport or schema error is unknown, never auto-retry.
-        let result = client.start_turn(thread, &checked.owner, id, input);
-        let status = match result {
-            Ok(response)
-                if (response["result"]["result"]["turn"].is_object()
-                    || response["result"]["turn"].is_object()) =>
-            {
-                "accepted"
-            }
-            Err(ref error) if error == "Codex IPC: request-version-mismatch" => "rejected",
-            _ => "unknown",
-        };
-        self.ledger.mark(id, status)?;
-        if status == "unknown" {
-            // A failed framed read may have consumed a partial frame. Reconnect before reading.
-            if let Ok(mut fresh) = ipc::IpcClient::connect(&self.home) {
-                if let Ok(snapshot) = fresh.snapshot(thread, None) {
-                    self.reconcile(thread, &snapshot.state)?;
-                }
-            }
-        }
-        self.ledger.read(id, thread)
-    }
+
 }
 
 fn request_id(params: &Value) -> Result<&str, String> {

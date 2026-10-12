@@ -128,45 +128,7 @@ impl Bridge {
             if let Some(old) = self.ledger.existing(id, thread, &text)? {
                 return Ok(old);
             }
-            if history::send_block_reason(&snapshot.state).is_none() {
-                return self.start(&json!({"threadId":thread,"requestId":id,"text":text}));
-            }
-            if !snapshot.state["requests"]
-                .as_array()
-                .is_some_and(Vec::is_empty)
-                || !history::turns(&snapshot.state)
-                    .last()
-                    .is_some_and(|t| t["status"] == "inProgress")
-            {
-                return Err("请先处理当前审批或阻塞问题".into());
-            }
-            self.ledger.begin(id, thread, &text)?;
-            let result=client.request("thread-follower-steer-turn",json!({"conversationId":thread,"clientUserMessageId":id,"restoreMessage":{"id":id,"cwd":snapshot.state["cwd"],"context":{"text":text,"commentAttachments":[],"fileAttachments":[],"imageAttachments":[],"addedFiles":[],"workspaceRoots":[snapshot.state["cwd"]]}},"input":[{"type":"text","text":text,"text_elements":[]}]}),1,Some(&snapshot.owner));
-            // Acceptance requires the original owner's accepted user message, not an IPC ack.
-            self.ledger.mark(
-                id,
-                if result
-                    .as_ref()
-                    .err()
-                    .is_some_and(|e| e == "Codex IPC: request-version-mismatch")
-                {
-                    "rejected"
-                } else {
-                    "unknown"
-                },
-            )?;
-            for delay in [0, 200, 500] {
-                std::thread::sleep(std::time::Duration::from_millis(delay));
-                if let Ok(s) =
-                    IpcClient::connect(&self.home).and_then(|mut c| c.snapshot(thread, None))
-                {
-                    self.reconcile(thread, &s.state)?;
-                    if self.ledger.read(id, thread)?["status"] == "accepted" {
-                        break;
-                    }
-                }
-            }
-            return self.ledger.read(id, thread);
+            return self.start(&json!({"threadId":thread,"requestId":id,"text":text}));
         }
         let _=client.request("thread-follower-submit-user-input",json!({"conversationId":thread,"requestId":request["requestId"],"response":{"answers":answers}}),1,Some(&snapshot.owner));
         let fresh = IpcClient::connect(&self.home)?.snapshot(thread, Some(&snapshot.owner))?;
@@ -192,7 +154,10 @@ mod tests {
             s["turns"][0]["status"] = json!(status);
             assert_eq!(pending(&s).len(), 1, "ended turn: {status}");
         }
-        s["turns"].as_array_mut().unwrap().push(json!({"turnId":"next","status":"inProgress","items":[]}));
+        s["turns"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"turnId":"next","status":"inProgress","items":[]}));
         assert_eq!(pending(&s).len(), 1, "new turn cannot revive old questions");
         s["turns"].as_array_mut().unwrap().pop();
         s["turns"][0]["status"] = json!("inProgress");

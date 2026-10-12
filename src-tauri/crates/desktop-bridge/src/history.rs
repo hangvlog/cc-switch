@@ -61,6 +61,24 @@ pub fn send_block_reason(state: &Value) -> Option<&'static str> {
     None
 }
 
+// Steering stays on the original owner and never interrupts its active turn.
+pub fn can_steer(state: &Value) -> bool {
+    conversation_block_reason(state).is_none()
+        && state["requests"].as_array().is_some_and(Vec::is_empty)
+        && state["threadRuntimeStatus"]["type"] == "active"
+        && turns(state)
+            .last()
+            .is_some_and(|t| t["status"] == "inProgress")
+}
+
+pub fn dispatch_block_reason(state: &Value) -> Option<&'static str> {
+    if can_steer(state) {
+        None
+    } else {
+        send_block_reason(state)
+    }
+}
+
 pub fn contains_request(state: &Value, request: &str) -> bool {
     turns(state).iter().any(|turn| {
         turn["items"].as_array().into_iter().flatten().any(|item| {
@@ -161,7 +179,8 @@ pub fn visible_thread(
         "createdAt":state["createdAt"],"updatedAt":state["updatedAt"],"turns":output,
         "desktop":{"owner":owner,"revision":revision,"source":"live","observedAt":crate::now_ms(),
             "status":state["threadRuntimeStatus"]["type"],"model":state["latestModel"],
-            "clarifications":crate::clarification::pending(state),"canQueue":conversation_block_reason(state).is_none(),"canSend":send_block_reason(state).is_none(),"reason":send_block_reason(state)}})
+            "activeTurnId":all.last().filter(|t| t["status"] == "inProgress").map(|t| &t["turnId"]),
+            "canSteer":can_steer(state),"clarifications":crate::clarification::pending(state),"canQueue":conversation_block_reason(state).is_none(),"canSend":send_block_reason(state).is_none(),"reason":send_block_reason(state)}})
 }
 
 #[cfg(test)]

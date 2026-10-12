@@ -265,6 +265,28 @@ impl IpcClient {
         Err("原桌面任务尚未加载，请先在电脑打开该任务".into())
     }
 
+    pub fn steer_turn(
+        &mut self,
+        thread: &str,
+        owner: &str,
+        request_id: &str,
+        cwd: &Value,
+        text: &str,
+        input: Value,
+    ) -> Result<Value, String> {
+        self.request(
+            "thread-follower-steer-turn",
+            json!({
+                "conversationId":thread,"clientUserMessageId":request_id,"input":input,
+                "restoreMessage":{"id":request_id,"text":text,"cwd":cwd,"createdAt":crate::now_ms(),
+                    "context":{"prompt":text,"commentAttachments":[],"fileAttachments":[],
+                        "imageAttachments":[],"addedFiles":[],"workspaceRoots":[cwd]}}
+            }),
+            1,
+            Some(owner),
+        )
+    }
+
     pub fn start_turn(
         &mut self,
         thread: &str,

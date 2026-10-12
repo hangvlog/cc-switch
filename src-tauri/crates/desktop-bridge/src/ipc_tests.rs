@@ -73,6 +73,13 @@ fn follows_original_owner_and_inherits_settings_without_claiming_ownership() {
             .get("model")
             .is_none());
         reply(&mut stream, &send, json!({"result":{"turn":{"id":"turn"}}}));
+        let steer = read(&mut stream);
+        assert_eq!(steer["method"], "thread-follower-steer-turn");
+        assert_eq!(steer["targetClientId"], "owner");
+        assert_eq!(steer["params"]["clientUserMessageId"], "steer-id");
+        assert_eq!(steer["params"]["input"][0]["text"], "追加要求");
+        assert!(steer["params"].get("model").is_none());
+        reply(&mut stream, &steer, json!({"result":{"turnId":"turn"}}));
     });
     let mut client = IpcClient::connect(root.path()).unwrap();
     let snapshot = client.snapshot("thread", None).unwrap();
@@ -85,6 +92,17 @@ fn follows_original_owner_and_inherits_settings_without_claiming_ownership() {
             json!([{"type":"text","text":"hello","text_elements":[]},{"type":"localImage","path":"/private/test/image.png"}])
         )
         .is_ok());
+    let steered = client
+        .steer_turn(
+            "thread",
+            &snapshot.owner,
+            "steer-id",
+            &json!("/qa"),
+            "追加要求",
+            json!([{"type":"text","text":"追加要求","text_elements":[]}]),
+        )
+        .unwrap();
+    assert_eq!(steered["result"]["result"]["turnId"], "turn");
     server.join().unwrap();
 }
 

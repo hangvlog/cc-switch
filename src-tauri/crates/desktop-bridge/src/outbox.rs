@@ -65,14 +65,9 @@ impl Bridge {
                 )?;
                 continue;
             }
-            // Pending clarifications/approvals, errors and active turns keep the outbox paused.
-            if !crate::clarification::pending(&snap.state).is_empty()
-                || history::send_block_reason(&snap.state).is_some()
-                || snap.state["threadRuntimeStatus"]["type"] != "idle"
-                || history::turns(&snap.state)
-                    .last()
-                    .is_some_and(|t| t["status"] != "completed")
-            {
+            // Deliver existing phone outbox entries through the owner's active turn too.
+            // Blocking input/approval still requires an explicit answer.
+            if history::dispatch_block_reason(&snap.state).is_some() {
                 continue;
             }
             match self.start(&json!({"threadId":thread,"requestId":id,"text":text,"images":images,"files":files}))
