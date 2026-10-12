@@ -18,6 +18,7 @@ pub mod native;
 mod outbox;
 mod queue;
 mod saved_history;
+mod search;
 mod sidebar;
 mod version;
 
@@ -33,6 +34,7 @@ pub fn now_ms() -> u64 {
 
 pub struct Bridge {
     home: PathBuf,
+    search: search::Search,
     ledger: ledger::Ledger,
     creations: creation::Creations,
     native_creations: native::creation::NativeCreations,
@@ -57,6 +59,7 @@ impl Bridge {
         let ledger = ledger::Ledger::open(storage)?;
         Ok(Self {
             home: home.into(),
+            search: search::Search::open(storage)?,
             ledger,
             creations: creation::Creations::open(storage)?,
             native_creations: native::creation::NativeCreations::open(queue_storage)?,
@@ -112,7 +115,7 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
+                "userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
                 "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":false,"approvals":false}})),
             "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
@@ -127,6 +130,7 @@ impl Bridge {
                 models::select(&self.home, thread, model)
             }
             "desktop/status" => Ok(version::status(&self.home)),
+            "desktop/thread/search" => self.search.query(&self.home, params["query"].as_str().ok_or("请输入搜索词")?),
             "desktop/thread/list" => {
                 let offset = params["cursor"]
                     .as_str()
