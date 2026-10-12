@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use uuid::Uuid;
 
+mod identity;
 pub(crate) mod transport;
 
 use transport::{http_client_builder, post_json_with_direct_fallback};
@@ -86,11 +86,7 @@ impl ClawkitAccountClient {
         if username.is_empty() || password.is_empty() {
             return Err("请输入账号和密码".to_string());
         }
-        let device_id = self
-            .load_session()
-            .ok()
-            .map(|session| session.device_id)
-            .unwrap_or_else(|| format!("clawkit-desktop-{}", Uuid::new_v4()));
+        let device_id = identity::load_or_create(&self.session_path)?;
         let (endpoint, payload) =
             login_request(&self.account_api_base, username, password, &device_id);
         let response =
@@ -125,10 +121,12 @@ impl ClawkitAccountClient {
     }
 
     pub fn logout(&self) -> Result<Value, String> {
+        let identity = identity::load_or_create(&self.session_path);
         if self.session_path.exists() {
             fs::remove_file(&self.session_path)
                 .map_err(|error| format!("无法清除 ClawKit 登录状态: {error}"))?;
         }
+        identity?;
         Ok(json!({ "status": "ok", "authenticated": false }))
     }
 
@@ -225,7 +223,13 @@ impl ClawkitAccountClient {
     fn load_session(&self) -> Result<StoredSession, String> {
         let text =
             fs::read_to_string(&self.session_path).map_err(|_| "尚未登录 ClawKit".to_string())?;
-        serde_json::from_str(&text).map_err(|_| "ClawKit 登录状态无效".to_string())
+        let session =
+            serde_json::from_str(&text).map_err(|_| "ClawKit 登录状态无效".to_string())?;
+        // Authentication validity must not depend on identity storage health.
+        if let Err(error) = identity::load_or_create(&self.session_path) {
+            log::warn!("{error}");
+        }
+        Ok(session)
     }
 
     fn save_session(&self, session: &StoredSession) -> Result<(), String> {

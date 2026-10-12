@@ -216,6 +216,11 @@ mod tests {
             responder.join().unwrap();
             assert_eq!(status["deviceId"], "clawkit-desktop-existing", "{cleanup}");
             assert_eq!(status["user"]["id"], 8);
+            use sha2::{Digest, Sha256};
+            assert_eq!(
+                restarted.remote_queue_scope().unwrap(),
+                format!("{:x}", Sha256::digest(b"8"))
+            );
             let stored = std::fs::read_to_string(&path).unwrap();
             assert!(!stored.contains("old-token"));
             let identity = std::fs::read_to_string(path.with_extension("device-id")).unwrap();
