@@ -151,6 +151,8 @@ impl ClawkitAccountClient {
         } else {
             session.device_id.clone()
         };
+        let device_name = crate::services::sync_protocol::detect_system_device_name()
+            .unwrap_or_else(|| format!("电脑 {}", device_id.chars().rev().take(8).collect::<String>().chars().rev().collect::<String>()));
         let response = self
             .client
             .post(format!(
@@ -161,7 +163,7 @@ impl ClawkitAccountClient {
             .json(&json!({
                 "role": "desktop",
                 "device_id": device_id,
-                "device_name": if owner {"ClawKit 原桌面"} else {DEVICE_NAME},
+                "device_name": device_name,
             }))
             .send()
             .await
