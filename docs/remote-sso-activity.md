@@ -92,3 +92,10 @@ Android 更新已发布（release 87），更新接口返回 0.1.37，完整公�
 将“官方应用已运行”与“活动视图适配成功”分开：窗口服务返回 running/pid/ready/reason，启动完成不再等待活动函数适配；子进程提前退出明确报错，不伪称已启动。桌面启动调用移入后台线程并禁用重复点击，活动同步失败不会关闭原生引擎或既有任务连接。设置页单独展示活动同步状态。
 
 macOS 新增无需设置界面的恢复入口：`/Applications/ClawKit\ Desktop.app/Contents/MacOS/cc-switch --clawkit-open-codex`；只读诊断为 `--clawkit-codex-status`。两者均在 WebView 与单实例锁之前执行。不更改官方 App、Dock、全局环境或登录项，仍拒绝中断已有官方进程。该入口绕过界面故障，不等于远程中继脱离 ClawKit 后台，也不消除活动通道必须在启动时接入的限制。直接启动官方应用时，项目/历史与可用的已有任务通道仍独立工作，活动同步不可用会明确提示。
+
+
+3.19.55 验收（2026-10-13）：源码 `884043f0d91780b4833bc9cca9f1d34eb8c252c1` 已推送，精确归档构建；远程页面 11 项测试通过。活动适配超时的原场景返回 running=true/ready=false，状态查询小于 100 ms，重复启动不多开。正式安装包的恢复命令约 0.35 秒返回，隔离官方窗口及原生引擎均就绪；没有登录凭据、发送消息或操作生产任务。CUA Driver 确认独立活动状态、恢复命令、远程等待手机状态及“已有官方进程”保护提示。官方生产 PID 89269 保持运行，canSend=true，但活动与原生新建仍未接入。
+
+本机已安装 3.19.55，3.19.54 回滚副本保存在 `.local/remote-launch-20261013/rollback/ClawKit Desktop 3.19.54.app`。DMG 摘要 `caec046caa6714e16db61d35cee2c570bced2bbc7c353d964972d57ece23b9cf`，51225188 字节；挂载、签名、实际 CLI 入口及完整公网下载均通过。自有发布服务 release 90 提供手动下载，缺少 updater 签名，保持 draft；不宣称自动更新发布。下载：https://clawkit.chat/api/releases/download/3.19.55/ClawKit-3.19.55-macos-arm64.dmg 。主仓完整发布记录为 `docs/front/clawkit-desktop-3.19.55-release.json`。
+
+此次只交付启动容错与恢复入口；未经接入直接打开官方应用时，完整活动/已读同步仍不可用，ClawKit 退出后中继仍会中断。它不是彻底移除 ClawKit 依赖或官方 Remote 全功能完成的证明。
