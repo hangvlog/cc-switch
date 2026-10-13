@@ -132,10 +132,15 @@ pub fn visible_thread(
             {
                 continue;
             }
-            let key = item["clientId"]
+            // Transcript history uses the server item ID. Client IDs are only
+            // aliases for the send receipt and accepted steering placeholder.
+            let client_id = item["clientId"]
                 .as_str()
-                .or_else(|| item["clientUserMessageId"].as_str())
+                .or_else(|| item["clientUserMessageId"].as_str());
+            let key = item["serverUserMessageId"]
+                .as_str()
                 .or_else(|| item["id"].as_str())
+                .or(client_id)
                 .unwrap_or("");
             if !key.is_empty() && !seen.insert(key.to_owned()) {
                 continue;
@@ -165,7 +170,7 @@ pub fn visible_thread(
             items.push(if kind == "agentMessage" {
                 json!({"id":key,"type":"agentMessage","text":text,"phase":item["phase"]})
             } else {
-                json!({"id":key,"type":"userMessage","content":attachments.project_content(item.get("content").or_else(||item.get("input")).unwrap_or(&Value::Null))})
+                json!({"id":key,"clientId":client_id,"type":"userMessage","content":attachments.project_content(item.get("content").or_else(||item.get("input")).unwrap_or(&Value::Null))})
             });
             count += 1;
         }
@@ -210,6 +215,23 @@ mod tests {
         assert!(!result.to_string().contains("secret"));
         assert!(!result.to_string().contains("private reasoning"));
         assert_eq!(result["desktop"]["canSend"], true);
+    }
+    #[test]
+    fn history_and_live_share_server_ids_and_keep_receipt_aliases() {
+        let state = json!({"turns":[{"turnId":"turn","items":[
+            {"type":"userMessage","id":"server-1","clientId":"client-1","content":[{"type":"text","text":"same"}]},
+            {"type":"steeringUserMessage","id":"client-1","clientUserMessageId":"client-1","serverUserMessageId":"server-1","status":"accepted","input":[{"type":"text","text":"same"}]},
+            {"type":"userMessage","id":"server-2","clientId":"client-2","content":[{"type":"text","text":"same"}]}
+        ]}]});
+        let root = tempfile::tempdir().unwrap();
+        let attachments = crate::attachments::Attachments::open(root.path()).unwrap();
+        let result = visible_thread(&state, "owner", 1, &attachments);
+        let items = result["turns"][0]["items"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0]["id"], "server-1");
+        assert_eq!(items[0]["clientId"], "client-1");
+        assert_eq!(items[1]["id"], "server-2");
+        assert!(contains_request(&state, "client-1"));
     }
     #[test]
     fn refuses_busy_unloaded_or_approval_states() {
