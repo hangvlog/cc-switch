@@ -29,6 +29,7 @@ pub mod native;
 mod renderer;
 mod outbox;
 mod owner_control;
+mod owner_output;
 mod queue;
 mod saved_history;
 mod search;

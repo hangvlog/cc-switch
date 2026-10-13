@@ -2,7 +2,7 @@
 //! The desktop retains its connection; human replies are arbitrated by the adapter.
 pub(crate) mod creation;
 mod control;
-mod output;
+pub(crate) mod output;
 mod events;
 mod reminders;
 pub(crate) mod responses;

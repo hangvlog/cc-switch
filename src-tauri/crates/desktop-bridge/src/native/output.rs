@@ -36,7 +36,7 @@ fn parts(store:&Attachments,items:&Value)->Vec<Value> {
         _=>None,
     }).collect()
 }
-pub(super) fn project(store:&Attachments,item:&mut Value) {
+pub(crate) fn project(store:&Attachments,item:&mut Value) {
     let kind=item["type"].as_str().unwrap_or("").to_owned();
     let content=match kind.as_str() {
         "mcpToolCall"=>parts(store,&item["result"]["content"]),

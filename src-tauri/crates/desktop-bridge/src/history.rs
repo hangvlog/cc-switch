@@ -118,6 +118,11 @@ pub fn visible_thread(
             }
             let kind = item["type"].as_str().unwrap_or("");
             if !matches!(kind, "userMessage" | "steeringUserMessage" | "agentMessage") {
+                if let Some(projected) = crate::owner_output::project(item, attachments, &mut budget) {
+                    if seen.insert(projected["id"].as_str().unwrap_or_default().to_owned()) {
+                        items.push(projected); count += 1;
+                    }
+                }
                 continue;
             }
             if kind == "agentMessage"
@@ -244,5 +249,19 @@ mod tests {
         state["threadRuntimeStatus"]["type"] = json!("idle");
         state["requests"] = json!([{"method":"approve"}]);
         assert!(send_block_reason(&state).is_some());
+    }
+
+    #[test]
+    fn ordinary_owner_keeps_command_result_and_completion_status() {
+        let state = json!({"id":"t","resumeState":"resumed","requests":[],"threadRuntimeStatus":{"type":"idle"},
+            "turns":[{"turnId":"turn","status":"completed","items":[
+                {"type":"commandExecution","id":"approval8","command":"printf OWNER_APPROVAL_OK",
+                 "status":"completed","aggregatedOutput":"OWNER_APPROVAL_OK","exitCode":0,"privateMetadata":"omit"}]}]});
+        let root = tempfile::tempdir().unwrap();
+        let attachments = crate::attachments::Attachments::open(root.path()).unwrap();
+        let result = visible_thread(&state,"owner",1,&attachments);
+        assert_eq!(result["turns"][0]["items"][0]["aggregatedOutput"],"OWNER_APPROVAL_OK");
+        assert_eq!(result["turns"][0]["items"][0]["status"],"completed");
+        assert!(result["turns"][0]["items"][0].get("privateMetadata").is_none());
     }
 }
