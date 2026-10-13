@@ -2,19 +2,12 @@
 use rusqlite::{params, Connection};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{collections::VecDeque, io::Read, path::Path};
+use std::{collections::VecDeque, io::Read, path::{Path,PathBuf}};
 
-pub(super) struct Reminders { db: Connection, scope: String }
+pub(super) struct Reminders { db: Connection, scope: String, home: PathBuf }
 impl Reminders {
     pub fn open(home: &Path) -> Result<Self, String> {
-        let mut auth = Vec::new();
-        if let Ok(file) = std::fs::File::open(home.join("auth.json")) {
-            file.take(128 * 1024 + 1).read_to_end(&mut auth).map_err(|e| e.to_string())?;
-            if auth.len() > 128 * 1024 { return Err("身份文件过大".into()); }
-        }
-        // Hash only; tokens and transcript text are never stored. A token refresh may
-        // conservatively start a new reminder bucket; an account change never reuses one.
-        let scope = format!("{:x}", Sha256::digest(&auth));
+        let scope = auth_scope(home)?;
         let directory = home.join("clawkit-runtime");
         std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
         let path = directory.join("reminders.sqlite");
@@ -25,7 +18,12 @@ impl Reminders {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).map_err(|e| e.to_string())?;
         }
-        Ok(Self { db, scope })
+        Ok(Self { db, scope, home:home.into() })
+    }
+    pub fn refresh_identity(&mut self) -> Result<bool, String> {
+        let current=auth_scope(&self.home)?;
+        if current==self.scope { return Ok(false); }
+        self.scope=current; Ok(true)
     }
     pub fn read(&self) -> Result<VecDeque<Value>, String> {
         let mut query = self.db.prepare("SELECT id,thread,kind,timestamp FROM (SELECT * FROM reminders WHERE scope=?1 ORDER BY timestamp DESC,rowid DESC LIMIT 100) ORDER BY timestamp ASC").map_err(|e| e.to_string())?;
@@ -39,6 +37,16 @@ impl Reminders {
         transaction.execute("DELETE FROM reminders WHERE rowid NOT IN (SELECT rowid FROM reminders ORDER BY timestamp DESC,rowid DESC LIMIT 100)",[]).map_err(|e|e.to_string())?;
         transaction.commit().map_err(|e|e.to_string())
     }
+}
+fn auth_scope(home:&Path)->Result<String,String> {
+    let mut auth = Vec::new();
+    if let Ok(file) = std::fs::File::open(home.join("auth.json")) {
+        file.take(128 * 1024 + 1).read_to_end(&mut auth).map_err(|e| e.to_string())?;
+        if auth.len() > 128 * 1024 { return Err("身份文件过大".into()); }
+    }
+    // Hash only; tokens and transcript text are never stored. A token refresh may
+    // conservatively start a new reminder bucket; an account change never reuses one.
+    Ok(format!("{:x}", Sha256::digest(&auth)))
 }
 #[cfg(test)] mod tests {
     use super::*;

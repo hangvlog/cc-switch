@@ -108,6 +108,13 @@ impl IpcClient {
             "hasUnreadTurn":false,"context":context}}))
     }
 
+    #[cfg(all(test, windows))]
+    pub(crate) fn broadcast_test_unread(&mut self, thread: &str, context: Value) -> Result<(), String> {
+        self.send(&json!({"type":"broadcast","sourceClientId":self.client_id,"version":3,
+            "method":"thread-read-state-changed","params":{"hostId":"local","conversationId":thread,
+            "hasUnreadTurn":true,"context":context}}))
+    }
+
     fn send(&mut self, value: &Value) -> Result<(), String> {
         let body = serde_json::to_vec(value).map_err(|e| e.to_string())?;
         if body.len() > MAX_FRAME {

@@ -98,7 +98,17 @@ impl Events {
             "events":events,"pendingRequests":self.pending.values().collect::<Vec<_>>()})
     }
 
+    fn refresh_reminder_identity(&mut self) {
+        if let Some(store)=&mut self.reminder_store {
+            match store.refresh_identity() {
+                Ok(true)=>self.reminders=store.read().unwrap_or_default(),
+                Err(_)=>self.reminders.clear(),
+                _=>{},
+            }
+        }
+    }
     fn remind(&mut self,kind:&str,thread:&Value) {
+        self.refresh_reminder_identity();
         use sha2::{Digest,Sha256};
         let id=format!("{:x}",Sha256::digest(format!("{}:{}:{kind}:{thread}",self.epoch,self.seq)));
         let event = json!({"id":id,"threadId":thread,"kind":kind,"timestampMs":crate::now_ms()});
@@ -106,7 +116,7 @@ impl Events {
         self.reminders.push_back(event);
         while self.reminders.len()>100 {self.reminders.pop_front();}
     }
-    pub fn reminders(&self)->Value {json!({"events":self.reminders,"observedAt":crate::now_ms()})}
+    pub fn reminders(&mut self)->Value {self.refresh_reminder_identity();json!({"events":self.reminders,"observedAt":crate::now_ms()})}
 
     pub fn position(&self) -> Value { json!({"engineInstanceId":self.epoch,"cursor":self.seq}) }
 
@@ -150,6 +160,16 @@ fn human_request(method: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reminders_clear_when_authentication_changes_without_restart() {
+        let root=tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("auth.json"),"account-a").unwrap();
+        let mut events=Events::open(root.path());
+        events.observe(&json!({"method":"turn/completed","params":{"threadId":"thread","turn":{"id":"turn"}}}));
+        assert_eq!(events.reminders()["events"].as_array().unwrap().len(),1);
+        std::fs::write(root.path().join("auth.json"),"account-b").unwrap();
+        assert!(events.reminders()["events"].as_array().unwrap().is_empty());
+    }
     #[test]
     fn replay_reset_and_auth_exclusion() {
         let mut events = Events::new();

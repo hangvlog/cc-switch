@@ -92,3 +92,27 @@ pub fn mark_read(home: &Path, thread: &str) -> Result<Value, String> {
     }
     Err("电脑未确认已读状态；请在任务结束后正常退出 Codex，再从 ClawKit 打开".into())
 }
+
+#[cfg(all(test, windows))]
+mod windows_live_tests {
+    #[test]
+    #[ignore = "Touches only a unique synthetic unread ID in the running official desktop"]
+    fn official_desktop_acknowledges_synthetic_read_state() {
+        let home=std::path::PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".codex");
+        let (context,_,_)=super::context(&home).expect("ChatGPT authentication required");
+        let thread=uuid::Uuid::new_v4().to_string();
+        let mut client=crate::ipc::IpcClient::connect(&home).unwrap();
+        struct Cleanup<'a> {client:&'a mut crate::ipc::IpcClient,thread:String,context:serde_json::Value}
+        impl Drop for Cleanup<'_> {fn drop(&mut self){let _=self.client.broadcast_read_state(&self.thread,self.context.clone());}}
+        let cleanup=Cleanup{client:&mut client,thread:thread.clone(),context:context.clone()};
+        cleanup.client.broadcast_test_unread(&thread,context).unwrap();
+        let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+        while std::time::Instant::now()<deadline {
+            if super::bucket(&home).is_some_and(|(_,ids)|ids.contains(&thread)){break;}
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(super::bucket(&home).is_some_and(|(_,ids)|ids.contains(&thread)),"Official desktop did not persist the synthetic unread broadcast");
+        assert_eq!(super::mark_read(&home,&thread).unwrap()["read"],true);
+        assert!(!super::bucket(&home).unwrap().1.contains(&thread));
+    }
+}
