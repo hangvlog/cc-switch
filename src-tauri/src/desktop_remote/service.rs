@@ -261,6 +261,8 @@ fn daemon() -> Result<(), String> {
     })
 }
 pub(super) fn maybe_run() {
+    // The GUI normally installs this in setup; the headless entry skips setup.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let args: Vec<_> = std::env::args_os().collect();
     let Some(flag) = args.get(1).and_then(|v| v.to_str()) else {
         return;
