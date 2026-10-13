@@ -48,6 +48,7 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     if let Some(profile) = profile {
         command.arg("--args").arg(format!("--user-data-dir={}", Path::new(&profile).display()));
     }
+    crate::router_launch::ensure_before_launch(home, adapter)?;
     let status = command.status()
         .map_err(|_| "无法启动 Codex")?;
     if status.success() {

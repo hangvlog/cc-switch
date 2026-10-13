@@ -15,6 +15,13 @@ mod ipc;
 mod ipc_tests;
 mod ledger;
 mod models;
+mod notifications;
+#[cfg(unix)]
+mod router;
+#[cfg(unix)]
+mod router_launch;
+#[cfg(all(test, unix))]
+mod router_tests;
 pub mod native;
 mod outbox;
 mod queue;
@@ -23,6 +30,12 @@ mod search;
 mod sidebar;
 mod thread_status;
 mod version;
+mod unread;
+
+pub fn maybe_run_router() {
+    #[cfg(unix)]
+    router_launch::maybe_run();
+}
 
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -35,6 +48,7 @@ pub fn now_ms() -> u64 {
 }
 
 pub struct Bridge {
+    notifications: std::sync::Mutex<notifications::Notifications>,
     home: PathBuf,
     search: search::Search,
     ledger: ledger::Ledger,
@@ -60,6 +74,7 @@ impl Bridge {
         }
         let ledger = ledger::Ledger::open(storage)?;
         Ok(Self {
+            notifications: std::sync::Mutex::new(notifications::Notifications::default()),
             home: home.into(),
             ledger,
             creations: creation::Creations::open(storage)?,
@@ -117,7 +132,7 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
+                "notifications":true,"readState":cfg!(unix),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
                 "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":false,"approvals":false}})),
             "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
@@ -131,8 +146,10 @@ impl Bridge {
                     .ok_or("请选择模型")?;
                 models::select(&self.home, thread, model)
             }
+            "desktop/notifications/list" => self.notifications.lock().map_err(|_| "提醒状态不可用")?.read(&self.home),
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/statuses" => thread_status::read(&self.home, params),
+            "desktop/thread/markRead" => unread::mark_read(&self.home,self.thread(params)?),
             "desktop/thread/search" => self.search.query(&self.home, params["query"].as_str().ok_or("请输入搜索词")?),
             "desktop/thread/list" => {
                 let offset = params["cursor"]

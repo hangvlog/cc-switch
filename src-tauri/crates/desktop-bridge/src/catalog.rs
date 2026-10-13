@@ -67,6 +67,7 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
     } else {
         None
     };
+    crate::unread::annotate(home,&mut data);
     let sidebar = if modern {
         let projects = crate::sidebar::projects(&connection)?;
         crate::sidebar::assign_projects(home, &mut data, &projects);

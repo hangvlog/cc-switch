@@ -33,7 +33,9 @@ pub fn read(home: &Path, params: &Value) -> Result<Value, String> {
             });
         }
     });
-    Ok(json!({"data":result.into_inner().unwrap(),"observedAt":crate::now_ms()}))
+    let mut data=result.into_inner().unwrap();
+    crate::unread::annotate(home,&mut data);
+    Ok(json!({"data":data,"observedAt":crate::now_ms()}))
 }
 
 #[cfg(test)]

@@ -184,3 +184,13 @@ fn incompatible_or_broken_ipc_does_not_trigger_navigation() {
     assert!(result.is_err());
     server.join().unwrap();
 }
+
+#[test]
+fn unified_router_routes_discovery_responses_and_targeted_broadcasts() {
+    let (client,mut peer)=UnixStream::pair().unwrap();
+    let (owner,mut target)=UnixStream::pair().unwrap();
+    peer.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    target.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+    // The router's routing table test uses real framed sockets and never touches Codex.
+    crate::router_tests::test_routing(client,owner,&mut peer,&mut target);
+}
