@@ -4,6 +4,7 @@ pub(crate) mod creation;
 mod control;
 mod output;
 mod events;
+mod reminders;
 mod responses;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -14,7 +15,7 @@ mod transport;
 mod endpoint;
 #[cfg(windows)]
 #[path="endpoint_windows.rs"]
-mod endpoint;
+pub(crate) mod endpoint;
 pub use runtime::maybe_run_adapter;
 
 #[cfg(target_os = "macos")]

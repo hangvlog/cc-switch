@@ -111,7 +111,7 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
     let init_id = Arc::new(Mutex::new(None::<Value>));
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let prefix = format!("clawkit-native-{}-", uuid::Uuid::new_v4());
-    let events = Arc::new(Mutex::new(super::events::Events::new()));
+    let events = Arc::new(Mutex::new(super::events::Events::open(home)));
     let desktop_output = Arc::new(Mutex::new(std::io::stdout()));
     {
         let (input, ready, init_id) = (input.clone(), ready.clone(), init_id.clone());

@@ -15,7 +15,9 @@ const READ_TIMEOUT: &str = "Codex IPC 响应超时";
 
 #[cfg(unix)]
 type Stream = std::os::unix::net::UnixStream;
-#[cfg(not(unix))]
+#[cfg(windows)]
+type Stream = crate::native::endpoint::Stream;
+#[cfg(not(any(unix,windows)))]
 type Stream = std::fs::File;
 
 pub struct IpcClient {
@@ -75,7 +77,27 @@ impl IpcClient {
         Ok(client)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    pub fn connect(home: &Path) -> Result<Self, String> {
+        // Official Windows IPC is global to the signed-in desktop user, not profile-scoped.
+        // Never apply another CODEX_HOME's identity to that global endpoint.
+        let expected = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from)
+            .ok_or("无法确认 Windows 用户目录")?.join(".codex");
+        if home.canonicalize().ok() != expected.canonicalize().ok() || !home.is_dir() {
+            return Err("隔离 Codex 配置不使用全局桌面 IPC".into());
+        }
+        let mut stream = Stream::connect(Path::new(r"\\.\pipe\codex-ipc"))
+            .map_err(|_| "无法连接当前用户的 Codex 桌面 IPC")?;
+        stream.set_read_timeout(Some(TIMEOUT)).map_err(|e| e.to_string())?;
+        stream.set_write_timeout(Some(TIMEOUT)).map_err(|e| e.to_string())?;
+        let mut client = Self { stream, client_id: "initializing-client".into(), timeout: TIMEOUT };
+        let initialized = client.request("initialize", json!({"clientType":"clawkit-remote"}), 0, None)?;
+        client.client_id = initialized["result"]["clientId"].as_str()
+            .ok_or("Codex IPC 初始化响应不兼容")?.to_owned();
+        Ok(client)
+    }
+
+    #[cfg(not(any(unix,windows)))]
     pub fn connect(_home: &Path) -> Result<Self, String> {
         Err("当前系统的原桌面 IPC 尚未完成适配，不能发送任务".into())
     }
@@ -98,7 +120,7 @@ impl IpcClient {
     }
 
     fn receive(&mut self, deadline: Instant) -> Result<Value, String> {
-        #[cfg(unix)]
+        #[cfg(any(unix,windows))]
         self.stream
             .set_read_timeout(Some(
                 deadline
@@ -316,5 +338,19 @@ impl IpcClient {
             2,
             Some(owner),
         )
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_live_tests {
+    #[test]
+    #[ignore = "Requires an installed running official desktop; initialization only"]
+    fn initializes_current_user_official_pipe() {
+        let home = std::path::PathBuf::from(std::env::var_os("USERPROFILE").unwrap()).join(".codex");
+        let client = super::IpcClient::connect(&home).unwrap();
+        assert_ne!(client.client_id, "initializing-client");
+        assert!(!client.client_id.is_empty());
+        let isolated = tempfile::tempdir().unwrap();
+        assert!(super::IpcClient::connect(isolated.path()).is_err());
     }
 }

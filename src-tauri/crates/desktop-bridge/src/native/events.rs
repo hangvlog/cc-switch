@@ -15,13 +15,23 @@ pub(super) struct Events {
     answered: HashSet<String>,
     answered_order: VecDeque<String>,
     reminders: VecDeque<Value>,
+    reminder_store: Option<super::reminders::Reminders>,
 }
 
 impl Events {
     pub fn new() -> Self {
         Self { epoch: uuid::Uuid::new_v4().to_string(), seq: 0, bytes: 0,
             retained: VecDeque::new(), pending: HashMap::new(), answered: HashSet::new(),
-            answered_order: VecDeque::new(), reminders: VecDeque::new() }
+            answered_order: VecDeque::new(), reminders: VecDeque::new(), reminder_store: None }
+    }
+
+    pub fn open(home: &std::path::Path) -> Self {
+        let mut events = Self::new();
+        if let Ok(store) = super::reminders::Reminders::open(home) {
+            events.reminders = store.read().unwrap_or_default();
+            events.reminder_store = Some(store);
+        }
+        events
     }
 
     pub fn observe(&mut self, message: &Value) {
@@ -91,7 +101,9 @@ impl Events {
     fn remind(&mut self,kind:&str,thread:&Value) {
         use sha2::{Digest,Sha256};
         let id=format!("{:x}",Sha256::digest(format!("{}:{}:{kind}:{thread}",self.epoch,self.seq)));
-        self.reminders.push_back(json!({"id":id,"threadId":thread,"kind":kind,"timestampMs":crate::now_ms()}));
+        let event = json!({"id":id,"threadId":thread,"kind":kind,"timestampMs":crate::now_ms()});
+        if let Some(store) = &mut self.reminder_store { let _ = store.save(&event); }
+        self.reminders.push_back(event);
         while self.reminders.len()>100 {self.reminders.pop_front();}
     }
     pub fn reminders(&self)->Value {json!({"events":self.reminders,"observedAt":crate::now_ms()})}

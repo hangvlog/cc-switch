@@ -136,7 +136,7 @@ impl Bridge {
         match method {
             "initialize" => { let event_ready=native::event_ready(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "notifications":true,"readState":cfg!(unix),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,
+                "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,
                 "taskFileRead":true,"imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready,"approvals":event_ready}})) },
             "desktop/events/read" => {
                 let mut batch=native::read_events(&self.home,params.clone())?;
