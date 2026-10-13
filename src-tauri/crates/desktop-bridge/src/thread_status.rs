@@ -2,23 +2,27 @@
 use serde_json::{json, Value};
 use std::{path::Path, sync::Mutex, collections::HashMap};
 
-fn runtime_status(runtime: &Value) -> &'static str {
+pub(crate) fn runtime_status(runtime: &Value) -> &'static str {
     match runtime["type"].as_str() {
         Some("active") if runtime["activeFlags"].as_array().is_some_and(|flags|
             flags.iter().any(|f| f == "waitingOnApproval" || f == "waitingOnUserInput")) => "waiting",
         Some("active") => "active",
-        Some("idle" | "notLoaded") => "idle",
+        Some("idle") => "idle",
         Some("systemError") => "error",
         _ => "unknown",
     }
 }
 
+pub(crate) fn owner_status(state: &Value) -> &'static str {
+    if state["requests"].as_array().is_some_and(|r| !r.is_empty()) || !crate::clarification::pending(state).is_empty() {
+        "waiting"
+    } else { runtime_status(&state["threadRuntimeStatus"]) }
+}
+
 fn project(state: &Value) -> Value {
     let all = crate::history::turns(state);
     let latest = all.last();
-    let waiting = state["requests"].as_array().is_some_and(|r| !r.is_empty())
-        || !crate::clarification::pending(state).is_empty();
-    let status = if waiting { "waiting" } else { runtime_status(&state["threadRuntimeStatus"]) };
+    let status = owner_status(state);
     let silent = latest.is_some_and(|t| t["status"] == "completed" && t["automationKind"] == "heartbeat"
         && t["automationNotificationDecision"] == "DONT_NOTIFY");
     let heartbeat = latest.filter(|t| t["automationKind"] == "heartbeat" &&
@@ -85,5 +89,6 @@ mod tests {
         s["turns"][0]=json!({"status":"completed","automationKind":"heartbeat","automationNotificationDecision":"DONT_NOTIFY"});
         assert_eq!(project(&s)["silentHeartbeat"],true);
         assert_eq!(runtime_status(&Value::Null),"unknown");
+        assert_eq!(runtime_status(&json!({"type":"notLoaded"})),"unknown");
     }
 }

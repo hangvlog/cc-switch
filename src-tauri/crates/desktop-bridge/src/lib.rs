@@ -28,6 +28,7 @@ pub mod native;
 #[cfg(target_os="macos")]
 mod renderer;
 mod outbox;
+mod owner_control;
 mod queue;
 mod saved_history;
 mod search;
@@ -144,14 +145,17 @@ impl Bridge {
             return Err("远程连接已关闭".into());
         }
         match method {
-            "initialize" => { let event_ready=native::event_ready(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
+            "initialize" => { let event_ready=native::event_ready(&self.home); let owner_ready=version::can_send(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,
-                "taskFileRead":true,"imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready,"approvals":event_ready}})) },
+                "taskFileRead":true,"imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready||owner_ready,"approvals":event_ready||owner_ready}})) },
             "desktop/events/read" => {
                 let mut batch=native::read_events(&self.home,params.clone())?;
                 self.project_events(&mut batch);Ok(batch)
             },
+            "desktop/owner/respond" => {
+                owner_control::respond(&self.home,self.thread(params)?,params)
+            }
             "desktop/request/respond" => {
                 self.thread(params)?;
                 native::request(&self.home, "clawkit/request/respond", params.clone())
@@ -159,7 +163,9 @@ impl Bridge {
             "desktop/turn/interrupt" => {
                 self.thread(params)?;
                 let turn = params["turnId"].as_str().filter(|v|!v.is_empty() && v.len()<200).ok_or("缺少执行轮次")?;
-                native::request(&self.home,"turn/interrupt",json!({"threadId":params["threadId"],"turnId":turn}))
+                if native::event_ready(&self.home) {
+                    native::request(&self.home,"turn/interrupt",json!({"threadId":params["threadId"],"turnId":turn}))
+                } else {owner_control::interrupt(&self.home,self.thread(params)?,turn)}
             }
             "desktop/thread/subscribe" => {
                 self.thread(params)?;

@@ -1,11 +1,11 @@
 //! Convert explicit human decisions using the original engine request's scope.
 use serde_json::{json, Value};
 
-pub(super) fn remote_form(request: &Value) -> bool {
+pub(crate) fn remote_form(request: &Value) -> bool {
     matches!(request["params"]["mode"].as_str(), Some("form" | "openai/form" | "openaiForm"))
 }
 
-pub(super) fn build(request: &Value, params: &Value) -> Result<Value, String> {
+pub(crate) fn build(request: &Value, params: &Value) -> Result<Value, String> {
     let decision=params["decision"].as_str().unwrap_or("");
     match request["method"].as_str().unwrap_or("") {
         "item/commandExecution/requestApproval" | "item/fileChange/requestApproval" => {

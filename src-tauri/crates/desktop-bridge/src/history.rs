@@ -183,7 +183,8 @@ pub fn visible_thread(
     json!({"id":state["id"],"preview":state["title"],"name":state["title"],"cwd":state["cwd"],
         "createdAt":state["createdAt"],"updatedAt":state["updatedAt"],"turns":output,
         "desktop":{"owner":owner,"revision":revision,"source":"live","observedAt":crate::now_ms(),
-            "status":state["threadRuntimeStatus"]["type"],"model":state["latestModel"],
+            "status":crate::thread_status::owner_status(state),"model":state["latestModel"],
+            "approvals":crate::owner_control::approvals(state,owner),
             "activeTurnId":all.last().filter(|t| t["status"] == "inProgress").map(|t| &t["turnId"]),
             "canSteer":can_steer(state),"clarifications":crate::clarification::pending(state),"canQueue":conversation_block_reason(state).is_none(),"canSend":send_block_reason(state).is_none(),"reason":send_block_reason(state)}})
 }
