@@ -2,6 +2,8 @@
 use crate::clawkit_account::ClawkitAccountClient;
 #[path = "desktop_remote_events.rs"]
 mod events;
+#[cfg(target_os = "macos")]
+mod service;
 use clawkit_desktop_bridge::Bridge;
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -25,6 +27,8 @@ struct Runtime {
 pub struct DesktopRemoteState(Arc<Mutex<Runtime>>);
 
 fn storage() -> PathBuf {
+    #[cfg(target_os = "macos")]
+    if let Some(path) = service::storage_override() { return path; }
     crate::config::get_app_config_dir().join("desktop-remote")
 }
 fn preference() -> PathBuf {
@@ -36,16 +40,16 @@ fn codex_home() -> PathBuf {
         .unwrap_or_else(|| crate::config::get_home_dir().join(".codex"))
 }
 
-fn phase(app: &AppHandle, state: &DesktopRemoteState, value: &str) {
+fn phase(app: Option<&AppHandle>, state: &DesktopRemoteState, value: &str) {
     if let Ok(mut runtime) = state.0.lock() {
         if runtime.phase != value {
             crate::desktop_remote_log::report(value);
         }
         runtime.phase = value.into();
-        let _ = app.emit(
+        if let Some(app) = app { let _ = app.emit(
             "desktop-remote-status",
             json!({"enabled":runtime.enabled,"phase":value}),
-        );
+        ); }
     }
 }
 
@@ -68,7 +72,7 @@ impl DesktopRemoteState {
         Ok(())
     }
 
-    fn start(&self, app: AppHandle) -> Result<(), String> {
+    fn start(&self, app: Option<AppHandle>) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "远程状态不可用")?;
         if state.enabled {
             return Ok(());
@@ -116,18 +120,18 @@ impl DesktopRemoteState {
             loop {
                 let account = ClawkitAccountClient::default();
                 if account.remote_queue_scope().ok().as_deref() != Some(relay_scope.as_str()) {
-                    phase(&app, &runtime, "login-required");
+                    phase(app.as_ref(), &runtime, "login-required");
                     break;
                 }
-                phase(&app, &runtime, "connecting");
+                phase(app.as_ref(), &runtime, "connecting");
                 match account.create_owner_socket_ticket().await {
                     Ok(ticket) => if let Some(url) = ticket["websocketUrl"].as_str() {
-                        if relay(&app, &runtime, &account, bridge.clone(), url, &relay_scope).await.is_ok() { delay = 1; }
+                        if relay(app.as_ref(), &runtime, &account, bridge.clone(), url, &relay_scope).await.is_ok() { delay = 1; }
                     },
-                    Err(error) if error.contains("重新登录") => { phase(&app,&runtime,"login-required");break; },
+                    Err(error) if error.contains("重新登录") => { phase(app.as_ref(),&runtime,"login-required");break; },
                     Err(_) => {},
                 }
-                phase(&app, &runtime, "reconnecting");
+                phase(app.as_ref(), &runtime, "reconnecting");
                 tokio::time::sleep(Duration::from_secs(delay)).await;
                 delay = (delay * 2).min(30);
             }
@@ -145,7 +149,7 @@ fn state_flag(bridge: &Arc<Mutex<Bridge>>) -> Arc<std::sync::atomic::AtomicBool>
 }
 
 async fn relay(
-    app: &AppHandle,
+    app: Option<&AppHandle>,
     state: &DesktopRemoteState,
     account: &ClawkitAccountClient,
     bridge: Arc<Mutex<Bridge>>,
@@ -221,7 +225,13 @@ async fn relay(
 
 #[tauri::command]
 pub fn get_desktop_remote_status(state: State<'_, DesktopRemoteState>) -> Result<Value, String> {
-    state.status()
+    #[cfg(target_os = "macos")]
+    {
+        let local=state.status()?;
+        if local["enabled"]==true { Ok(json!({"backgroundService":false,"fallback":true,"enabled":true,"phase":local["phase"],"mode":"desktop-owner"})) } else {service::status()}
+    }
+    #[cfg(not(target_os = "macos"))]
+    { state.status() }
 }
 
 #[tauri::command]
@@ -234,44 +244,71 @@ pub async fn get_desktop_remote_capabilities() -> Result<Value, String> {
 }
 
 #[tauri::command]
-pub fn set_desktop_remote_enabled(
+pub async fn set_desktop_remote_enabled(
     enabled: bool,
     app: AppHandle,
     state: State<'_, DesktopRemoteState>,
 ) -> Result<Value, String> {
-    if enabled {
-        ClawkitAccountClient::default().active_credentials()?;
-        state.start(app.clone())?;
-    } else {
-        state.stop()?;
-    }
-    if let Err(error) =
-        crate::config::atomic_write(&preference(), if enabled { b"true" } else { b"false" })
+    #[cfg(target_os = "macos")]
     {
-        let _ = state.stop();
-        return Err(error.to_string());
+        state.stop()?;
+        let result=tauri::async_runtime::spawn_blocking(move || service::set_enabled(enabled))
+            .await.map_err(|_| "后台服务操作未完成".to_string())?;
+        match result {
+            Ok(value)=>Ok(value),
+            Err(_) if enabled && service::can_fallback()=>{
+                state.start(Some(app))?;
+                crate::config::atomic_write(&preference(),b"true").map_err(|e|e.to_string())?;
+                let mut value=state.status()?;value["backgroundService"]=json!(false);value["fallback"]=json!(true);Ok(value)
+            },
+            Err(error)=>Err(error),
+        }
     }
-    phase(
-        &app,
-        &state,
-        if enabled { "connecting" } else { "disabled" },
-    );
-    state.status()
+    #[cfg(not(target_os = "macos"))]
+    {
+        if enabled {
+            ClawkitAccountClient::default().active_credentials()?;
+            state.start(Some(app.clone()))?;
+        } else { state.stop()?; }
+        if let Err(error) = crate::config::atomic_write(&preference(), if enabled { b"true" } else { b"false" }) {
+            let _ = state.stop(); return Err(error.to_string());
+        }
+        phase(Some(&app), &state, if enabled { "connecting" } else { "disabled" });
+        state.status()
+    }
 }
 
 pub fn restore(app: &AppHandle) {
-    let state = app.state::<DesktopRemoteState>();
+    #[cfg(target_os = "macos")]
+    {
+        let app=app.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            if service::restore().is_err() && service::can_fallback() {
+                let _=app.state::<DesktopRemoteState>().start(Some(app.clone()));
+            }
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
     if std::fs::read_to_string(preference()).ok().as_deref() == Some("true") {
-        let _ = state.start(app.clone());
+        let _ = app.state::<DesktopRemoteState>().start(Some(app.clone()));
     }
 }
 
 pub fn sign_out(app: &AppHandle) -> Result<(), String> {
-    let state = app.state::<DesktopRemoteState>();
-    state.stop()?;
-    crate::config::atomic_write(&preference(), b"false").map_err(|error| error.to_string())?;
-    phase(app, &state, "disabled");
-    Ok(())
+    #[cfg(target_os = "macos")]
+    { app.state::<DesktopRemoteState>().stop()?; service::set_enabled(false).map(|_| ()) }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let state = app.state::<DesktopRemoteState>();
+        state.stop()?;
+        crate::config::atomic_write(&preference(), b"false").map_err(|error| error.to_string())?;
+        phase(Some(app), &state, "disabled"); Ok(())
+    }
+}
+
+pub fn maybe_run_service() {
+    #[cfg(target_os = "macos")]
+    service::maybe_run();
 }
 
 #[tauri::command]

@@ -39,6 +39,8 @@ export interface DiagnosticBundleUpload {
 export interface DesktopRemoteStatus {
   enabled: boolean;
   phase: string;
+  backgroundService?: boolean;
+  serviceRunning?: boolean;
   mode?: "desktop-owner";
 }
 export interface DesktopCapabilities {

@@ -184,6 +184,16 @@ describe("RemoteControlPage", () => {
     rendered.unmount();
     expect(mocks.enableOwner).not.toHaveBeenCalledWith(false);
   });
+  it("describes independent service lifetime when the host supports it", async () => {
+    mocks.ownerStatus.mockResolvedValue({enabled:true,phase:"waiting",backgroundService:true});
+    mocks.accountStatus.mockResolvedValue({authenticated:true,user:{id:7,username:"test"}});
+    render(<RemoteControlPage />);
+    await screen.findByText(/退出 ClawKit 窗口后仍保持连接/);
+    expect(screen.getByText(/正常打开电脑上的 Codex/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button",{name:"停止手机远程"}));
+    await waitFor(()=>expect(mocks.enableOwner).toHaveBeenCalledWith(false));
+  });
+
   it("stops the native bridge explicitly", async () => {
     render(<RemoteControlPage />);
     await login();
