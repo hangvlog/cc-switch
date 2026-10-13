@@ -29,6 +29,7 @@ mod saved_history;
 mod search;
 mod sidebar;
 mod thread_status;
+mod task_files;
 mod version;
 mod unread;
 
@@ -129,11 +130,37 @@ impl Bridge {
     }
 
     pub fn dispatch(&self, method: &str, params: &Value) -> Result<Value, String> {
+        if method != "initialize" && !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("远程连接已关闭".into());
+        }
         match method {
-            "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
+            "initialize" => { let event_ready=native::event_ready(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "notifications":true,"readState":cfg!(unix),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
-                "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":false,"approvals":false}})),
+                "notifications":true,"readState":cfg!(unix),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,
+                "taskFileRead":true,"imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready,"approvals":event_ready}})) },
+            "desktop/events/read" => {
+                let mut batch=native::read_events(&self.home,params.clone())?;
+                self.project_events(&mut batch);Ok(batch)
+            },
+            "desktop/request/respond" => {
+                self.thread(params)?;
+                native::request(&self.home, "clawkit/request/respond", params.clone())
+            }
+            "desktop/turn/interrupt" => {
+                self.thread(params)?;
+                let turn = params["turnId"].as_str().filter(|v|!v.is_empty() && v.len()<200).ok_or("缺少执行轮次")?;
+                native::request(&self.home,"turn/interrupt",json!({"threadId":params["threadId"],"turnId":turn}))
+            }
+            "desktop/thread/subscribe" => {
+                self.thread(params)?;
+                self.native_subscribe(self.thread(params)?)
+            }
+            "desktop/file/read" => {
+                let thread=self.thread(params)?;
+                let meta=native::request(&self.home,"thread/read",json!({"threadId":thread,"includeTurns":false}))?;
+                let cwd=meta["thread"]["cwd"].as_str().ok_or("任务目录不可用")?;
+                task_files::read(Path::new(cwd),params)
+            },
             "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
             "desktop/file/chunk" => self.attachments.file_chunk(params),
@@ -146,7 +173,9 @@ impl Bridge {
                     .ok_or("请选择模型")?;
                 models::select(&self.home, thread, model)
             }
-            "desktop/notifications/list" => self.notifications.lock().map_err(|_| "提醒状态不可用")?.read(&self.home),
+            "desktop/notifications/list" => if native::event_ready(&self.home) {
+                native::request(&self.home,"clawkit/notifications/read",json!({}))
+            } else {self.notifications.lock().map_err(|_| "提醒状态不可用")?.read(&self.home)},
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/statuses" => thread_status::read(&self.home, params),
             "desktop/thread/markRead" => unread::mark_read(&self.home,self.thread(params)?),
@@ -162,13 +191,14 @@ impl Bridge {
                 }
                 catalog::list(&self.home, offset)
             }
-            "desktop/thread/history" => Ok(conditional_read::response(saved_history::read(
-                &self.home,
-                self.thread(params)?,
-                params["cursor"].as_str(),
-                params["usersOnly"] == true,
-                &self.attachments,
-            )?, params["ifVersion"].as_str())),
+            "desktop/thread/history" => {
+                let thread=self.thread(params)?;
+                if let Some(cursor)=params["cursor"].as_str().and_then(|v|v.strip_prefix("engine:")) {
+                    self.native_history(thread,cursor)
+                } else {
+                    Ok(conditional_read::response(saved_history::read(&self.home,thread,params["cursor"].as_str(),params["usersOnly"]==true,&self.attachments)?,params["ifVersion"].as_str()))
+                }
+            }
             "desktop/thread/read" | "desktop/thread/activate" => {
                 let thread = self.thread(params)?;
                 let snapshot = if method == "desktop/thread/activate" {
@@ -207,7 +237,7 @@ impl Bridge {
             "desktop/queue/add" => self.enqueue(params),
             "desktop/queue/cancel" => self.cancel_queue(params),
             "desktop/clarification/answer" => self.answer(params),
-            "desktop/turn/start" => self.start(params),
+            "desktop/turn/start" => if native::event_ready(&self.home) {self.native_start(params)} else {self.start(params)},
             "desktop/thread/create" => self.create(params),
             "desktop/creation/read" => {
                 let id = request_id(params)?;
@@ -222,7 +252,11 @@ impl Bridge {
                 let thread = self.thread(params)?;
                 let id = request_id(params)?;
                 // Failure to read the desktop cannot turn an unknown result into rejection.
-                if let Ok(mut client) = ipc::IpcClient::connect(&self.home) {
+                if native::event_ready(&self.home) {
+                    if let Ok(result)=self.native_subscribe(thread) {
+                        self.native_reconcile(thread,&result["thread"])?;
+                    }
+                } else if let Ok(mut client) = ipc::IpcClient::connect(&self.home) {
                     if let Ok(snapshot) = client.snapshot(thread, None) {
                         self.reconcile(thread, &snapshot.state)?;
                     }

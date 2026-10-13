@@ -1,5 +1,7 @@
 //! Native relay lifetime is independent of the settings WebView.
 use crate::clawkit_account::ClawkitAccountClient;
+#[path = "desktop_remote_events.rs"]
+mod events;
 use clawkit_desktop_bridge::Bridge;
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
@@ -75,6 +77,7 @@ impl DesktopRemoteState {
         let queue_scope = ClawkitAccountClient::default().remote_queue_scope()?;
         let bridge = Bridge::open_with_queue_storage(
             &codex_home(),
+            // Preserve durable receipts from prior releases; never lose unknown sends.
             &storage(),
             &storage().join("accounts").join(&queue_scope),
         )?;
@@ -87,6 +90,10 @@ impl DesktopRemoteState {
             let queue_bridge = bridge.clone();
             let queue_account = ClawkitAccountClient::default();
             let queue_enabled = state_flag(&queue_bridge);
+            let relay_scope = queue_scope.clone();
+            struct Disable(std::sync::Arc<std::sync::atomic::AtomicBool>);
+            impl Drop for Disable { fn drop(&mut self) { self.0.store(false, std::sync::atomic::Ordering::SeqCst); } }
+            let _disable = Disable(queue_enabled.clone());
             let queue_worker = tauri::async_runtime::spawn(async move {
                 loop {
                     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -108,18 +115,17 @@ impl DesktopRemoteState {
             let mut delay = 1;
             loop {
                 let account = ClawkitAccountClient::default();
-                if account.active_credentials().is_err() {
+                if account.remote_queue_scope().ok().as_deref() != Some(relay_scope.as_str()) {
                     phase(&app, &runtime, "login-required");
                     break;
                 }
                 phase(&app, &runtime, "connecting");
-                if let Ok(ticket) = account.create_owner_socket_ticket().await {
-                    if let Some(url) = ticket["websocketUrl"].as_str() {
-                        let result = relay(&app, &runtime, &account, bridge.clone(), url).await;
-                        if result.is_ok() {
-                            delay = 1;
-                        }
-                    }
+                match account.create_owner_socket_ticket().await {
+                    Ok(ticket) => if let Some(url) = ticket["websocketUrl"].as_str() {
+                        if relay(&app, &runtime, &account, bridge.clone(), url, &relay_scope).await.is_ok() { delay = 1; }
+                    },
+                    Err(error) if error.contains("重新登录") => { phase(&app,&runtime,"login-required");break; },
+                    Err(_) => {},
                 }
                 phase(&app, &runtime, "reconnecting");
                 tokio::time::sleep(Duration::from_secs(delay)).await;
@@ -144,6 +150,7 @@ async fn relay(
     account: &ClawkitAccountClient,
     bridge: Arc<Mutex<Bridge>>,
     url: &str,
+    expected_scope: &str,
 ) -> Result<(), ()> {
     let parsed = url::Url::parse(url).map_err(|_| ())?;
     if parsed.scheme() != "wss" {
@@ -160,10 +167,23 @@ async fn relay(
     .map_err(|_| ())?
     .map_err(|_| ())?;
     phase(app, state, "waiting");
+    let (responses, mut outbound) = tokio::sync::mpsc::channel::<Value>(64);
+    let event_task = tauri::async_runtime::spawn(events::pump(codex_home(), storage().join("accounts").join(expected_scope), responses.clone()));
+    struct Abort(tauri::async_runtime::JoinHandle<()>);
+    impl Drop for Abort { fn drop(&mut self) { self.0.abort(); } }
+    let _event_task = Abort(event_task);
     let mut heartbeat = tokio::time::interval(Duration::from_secs(20));
     let mut last_received = std::time::Instant::now();
     loop {
+        if account.remote_queue_scope().ok().as_deref() != Some(expected_scope) {
+            state_flag(&bridge).store(false, std::sync::atomic::Ordering::SeqCst); return Ok(());
+        }
         tokio::select! {
+            response = outbound.recv() => {
+                if let Some(response) = response {
+                    for frame in events::frames(response) { socket.send(Message::Text(frame.into())).await.map_err(|_| ())?; }
+                }
+            }
             _ = heartbeat.tick() => {
                 if last_received.elapsed()>Duration::from_secs(60) {return Err(());}
                 if account.active_credentials().is_err() { return Ok(()); }
@@ -181,12 +201,14 @@ async fn relay(
                         let Some(payload) = envelope["payload"].as_str().filter(|value|value.len()<=32*1024) else {continue;};
                         let Ok(request) = serde_json::from_str::<Value>(payload) else {continue;};
                         let bridge = bridge.clone();
-                        let response = tauri::async_runtime::spawn_blocking(move || {
-                            bridge.lock().ok().and_then(|bridge|bridge.handle(request))
-                        }).await.map_err(|_| ())?;
-                        if let Some(response) = response {
-                            socket.send(Message::Text(json!({"type":"relay.data","payload":response.to_string()}).to_string().into())).await.map_err(|_| ())?;
-                        }
+                        let responses = responses.clone();
+                        // Bounded dispatch queue; a slow RPC cannot stop heartbeats or events.
+                        let permit = responses.try_reserve_owned().map_err(|_| ())?;
+                        tauri::async_runtime::spawn_blocking(move || {
+                            if let Some(response) = bridge.lock().ok().and_then(|bridge|bridge.handle(request)) {
+                                permit.send(response);
+                            }
+                        });
                     }
                     Some(Ok(Message::Ping(payload))) => { socket.send(Message::Pong(payload)).await.map_err(|_| ())?; }
                     Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Err(()),
@@ -254,7 +276,7 @@ pub fn sign_out(app: &AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 pub fn launch_original_codex() -> Result<(), String> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos",windows))]
     {
         let adapter = std::env::current_exe().map_err(|_| "无法定位 ClawKit 运行程序")?;
         let result = clawkit_desktop_bridge::native::launch(&codex_home(), &adapter);
@@ -265,7 +287,7 @@ pub fn launch_original_codex() -> Result<(), String> {
         });
         result
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos",windows)))]
     {
         Err("请从系统应用菜单打开 Codex；此版本原桌面接续仅验证了 macOS".into())
     }

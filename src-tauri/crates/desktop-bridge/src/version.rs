@@ -64,7 +64,7 @@ fn running_build(_home: &Path) -> Option<String> {
 }
 
 pub fn can_send(home: &Path) -> bool {
-    crate::ipc::IpcClient::connect(home).is_ok()
+    crate::native::event_ready(home) || crate::ipc::IpcClient::connect(home).is_ok()
 }
 
 pub fn status(home: &Path) -> Value {

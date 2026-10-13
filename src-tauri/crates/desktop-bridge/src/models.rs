@@ -8,6 +8,7 @@ use std::{
 };
 
 pub fn list(home: &Path) -> Result<Value, String> {
+    if crate::native::event_ready(home) {return crate::native::request(home,"model/list",json!({"includeHidden":false}));}
     #[cfg(not(target_os = "macos"))]
     {
         let _ = home;
@@ -92,6 +93,12 @@ pub fn select(home: &Path, thread: &str, model: &str) -> Result<Value, String> {
         .is_some_and(|data| data.iter().any(|m| m["model"] == model))
     {
         return Err("所选模型不在电脑当前可用列表中，请刷新模型列表".into());
+    }
+    if crate::native::event_ready(home) {
+        let state=crate::native::request(home,"thread/read",json!({"threadId":thread,"includeTurns":false}))?;
+        if state["thread"]["status"]["type"]!="idle" {return Err("请等当前任务结束后切换模型".into());}
+        crate::native::request(home,"thread/settings/update",json!({"threadId":thread,"model":model}))?;
+        return Ok(json!({"model":model}));
     }
     let mut client = crate::ipc::IpcClient::connect(home)?;
     let snapshot = client.snapshot(thread, None)?;

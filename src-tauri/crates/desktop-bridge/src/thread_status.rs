@@ -21,14 +21,18 @@ pub fn read(home: &Path, params: &Value) -> Result<Value, String> {
         crate::catalog::verify_thread(home, id)?;
         if !threads.contains(&id) { threads.push(id); }
     }
+    let native = crate::native::event_ready(home);
     let pending = Mutex::new(threads.into_iter());
     let result = Mutex::new(Vec::new());
     std::thread::scope(|scope| {
         for _ in 0..ids.len().min(4) {
             scope.spawn(|| loop {
                 let Some(id) = pending.lock().unwrap().next() else { break };
-                let runtime = crate::ipc::IpcClient::passive_snapshot(home, id)
-                    .map(|snapshot| status(&snapshot.state)).unwrap_or("unknown");
+                let runtime = if native {
+                    crate::native::request(home,"thread/read",json!({"threadId":id,"includeTurns":false})).map(|value|match value["thread"]["status"]["type"].as_str() {
+                        Some("active")=>"active",Some("idle")=>"idle",Some("systemError")=>"error",_=>"unknown"
+                    }).unwrap_or("unknown")
+                } else {crate::ipc::IpcClient::passive_snapshot(home, id).map(|snapshot| status(&snapshot.state)).unwrap_or("unknown")};
                 result.lock().unwrap().push(json!({"id":id,"status":runtime}));
             });
         }

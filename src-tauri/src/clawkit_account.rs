@@ -170,9 +170,8 @@ impl ClawkitAccountClient {
             .map_err(|_| "无法连接 ClawKit 远程服务".to_string())?;
         let status = response.status();
         let body = response.json::<Value>().await.unwrap_or(Value::Null);
-        if status == StatusCode::UNAUTHORIZED {
-            let _ = self.logout();
-            return Err("登录已过期，请重新登录".to_string());
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err("远程登录已过期或被撤销，请重新登录".to_string());
         }
         let ticket = body
             .get("ticket")

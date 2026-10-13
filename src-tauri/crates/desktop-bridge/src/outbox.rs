@@ -19,9 +19,11 @@ impl Bridge {
         if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("远程连接已关闭".into());
         }
-        let snap = IpcClient::passive_snapshot(&self.home, thread)?;
-        if let Some(reason) = history::conversation_block_reason(&snap.state) {
-            return Err(reason.into());
+        if crate::native::event_ready(&self.home) {
+            self.native_subscribe(thread)?;
+        } else {
+            let snap = IpcClient::passive_snapshot(&self.home, thread)?;
+            if let Some(reason) = history::conversation_block_reason(&snap.state) {return Err(reason.into());}
         }
         if self.ledger.has_request(id)? {
             return Err("请求编号已用于直接发送".into());
@@ -45,6 +47,20 @@ impl Bridge {
             return Ok(());
         }
         for (id, thread, text, images, files) in self.queue.heads()? {
+            if crate::native::event_ready(&self.home) {
+                let Ok(snapshot)=self.native_subscribe(&thread) else {continue;};
+                if self.ledger.has_request(&id)? {
+                    let receipt=self.ledger.read(&id,&thread)?;
+                    self.queue.mark(&id,receipt["status"].as_str().unwrap_or("unknown"),None)?;
+                    continue;
+                }
+                if snapshot["pendingHumanRequest"]==true || snapshot["thread"]["turns"].as_array().into_iter().flatten().any(|t|t["status"]=="inProgress") {continue;}
+                // Explicit queue entries wait for the current turn; steering remains a separate action.
+                if let Ok(receipt)=self.native_send(&json!({"threadId":thread,"requestId":id,"text":text,"images":images,"files":files}),false) {
+                    self.queue.mark(&id,receipt["status"].as_str().unwrap_or("unknown"),None)?;
+                }
+                continue;
+            }
             let Ok(snap) = IpcClient::passive_snapshot(&self.home, &thread) else {
                 continue;
             };

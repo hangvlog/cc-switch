@@ -1,7 +1,6 @@
 use serde_json::{json, Value};
 use std::{
     io::{BufRead, BufReader, Read, Write},
-    os::unix::{fs::MetadataExt, net::UnixStream},
     path::Path,
     time::Duration,
 };
@@ -26,7 +25,9 @@ pub(super) fn read_line(
     Ok(Some(bytes))
 }
 
+#[cfg(unix)]
 pub(super) fn check_private(path: &Path, directory: bool) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
     let meta = std::fs::symlink_metadata(path)
         .map_err(|_| "原生新建通道尚未就绪；请从 ClawKit 打开 Codex")?;
     if meta.uid() != unsafe { libc::geteuid() }
@@ -40,10 +41,9 @@ pub(super) fn check_private(path: &Path, directory: bool) -> Result<(), String> 
 }
 
 pub(super) fn request(socket: &Path, method: &str, params: Value) -> Result<Value, String> {
-    check_private(socket.parent().ok_or("通道路径无效")?, true)?;
-    check_private(socket, false)?;
+    #[cfg(unix)] {check_private(socket.parent().ok_or("通道路径无效")?, true)?; check_private(socket, false)?;}
     let mut stream =
-        UnixStream::connect(socket).map_err(|_| "原生新建通道尚未就绪；请从 ClawKit 打开 Codex")?;
+        super::endpoint::Stream::connect(socket).map_err(|_| "原生新建通道尚未就绪；请从 ClawKit 打开 Codex")?;
     stream
         .set_read_timeout(Some(Duration::from_secs(if method == "clawkit/status" {
             2

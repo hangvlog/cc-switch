@@ -165,6 +165,21 @@ impl Attachments {
             json!({"imageId":id,"offset":offset + bytes.len() as u64,"total":total,"mimeType":mime,"data":STANDARD.encode(bytes)}),
         )
     }
+    pub(crate) fn import_image(&self, bytes:&[u8])->Result<String,String> {
+        if bytes.len()>MAX || !valid_image(bytes) {return Err("图片格式或大小无效".into());}
+        let id=format!("{:x}",Sha256::digest(bytes));
+        let target=self.0.join(&id);
+        if target.exists() {return Ok(id);}
+        let used:u64=fs::read_dir(&self.0).map_err(|e|e.to_string())?.filter_map(Result::ok)
+            .filter_map(|e|e.metadata().ok()).map(|m|m.len()).sum();
+        if used+bytes.len() as u64>256*1024*1024 {return Err("图片缓存已满".into());}
+        let temp=self.0.join(format!("{}.part",uuid::Uuid::new_v4()));
+        let mut options=fs::OpenOptions::new();options.create_new(true).write(true);
+        #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
+        let mut file=options.open(&temp).map_err(|e|e.to_string())?;
+        file.write_all(bytes).and_then(|_|file.sync_all()).map_err(|e|e.to_string())?;
+        fs::rename(&temp,target).map_err(|e|e.to_string())?;Ok(id)
+    }
     pub fn file_chunk(&self, p: &Value) -> Result<Value, String> {
         crate::file_uploads::chunk(self.0.parent().ok_or("附件目录无效")?, p)
     }

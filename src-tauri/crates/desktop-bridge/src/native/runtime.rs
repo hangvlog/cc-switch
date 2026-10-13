@@ -1,15 +1,10 @@
-//! Transparent stdio adapter. No second engine, initialization or event subscriber.
-use super::transport::{check_private, read_line, LOCAL_LIMIT, RESPONSE_LIMIT};
+//! Same-engine stdio adapter with bounded replay and atomic human-response routing.
+use super::transport::{read_line, LOCAL_LIMIT, RESPONSE_LIMIT};
+use super::endpoint::{bind, Stream, fallback};
 use serde_json::{json, Value};
 use std::{
     collections::HashMap,
     io::{BufReader, Write},
-    os::unix::{
-        fs::{OpenOptionsExt, PermissionsExt},
-        io::AsRawFd,
-        net::{UnixListener, UnixStream},
-        process::CommandExt,
-    },
     path::{Path, PathBuf},
     process::{ChildStdin, Command, Stdio},
     sync::{
@@ -20,13 +15,15 @@ use std::{
 };
 type Pending = Arc<Mutex<HashMap<String, mpsc::SyncSender<Value>>>>;
 type Input = Arc<Mutex<Option<ChildStdin>>>;
+type DesktopOutput = Arc<Mutex<std::io::Stdout>>;
+type EventState = Arc<Mutex<super::events::Events>>;
 
 pub fn maybe_run_adapter() {
     let Some(real) = std::env::var_os("CLAWKIT_CODEX_ENGINE").map(PathBuf::from) else {
         return;
     };
     let current = std::env::current_exe().ok();
-    if std::env::var_os("CODEX_CLI_PATH").map(PathBuf::from) != current {
+    if std::env::var_os("CODEX_CLI_PATH").map(PathBuf::from).and_then(|p|p.canonicalize().ok()) != current.as_ref().and_then(|p|p.canonicalize().ok()) {
         return;
     }
     if !real.is_absolute() || !real.is_file() || Some(&real) == current.as_ref() {
@@ -41,8 +38,7 @@ pub fn maybe_run_adapter() {
         .env_remove("CLAWKIT_CODEX_ENGINE")
         .env("CODEX_CLI_PATH", &real);
     if !main {
-        let _ = command.exec();
-        std::process::exit(2);
+        std::process::exit(fallback(&mut command));
     }
     let home = std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
@@ -93,38 +89,6 @@ fn send(input: &Input, bytes: &[u8]) -> Result<(), String> {
         .map_err(|_| "引擎输入已断开".into())
 }
 
-fn bind(home: &Path) -> Result<(UnixListener, std::fs::File, PathBuf), String> {
-    let socket = super::socket_path(home);
-    let directory = socket.parent().ok_or("通道路径无效")?;
-    if !directory.exists() {
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(directory)
-            .map_err(|e| e.to_string())?;
-    }
-    check_private(directory, true)?;
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(directory.join("engine.lock"))
-        .map_err(|e| e.to_string())?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        return Err("另一个桌面引擎已持有此通道".into());
-    }
-    if socket.exists() {
-        check_private(&socket, false)?;
-        std::fs::remove_file(&socket).map_err(|e| e.to_string())?;
-    }
-    let listener = UnixListener::bind(&socket).map_err(|e| e.to_string())?;
-    std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))
-        .map_err(|e| e.to_string())?;
-    Ok((listener, lock, socket))
-}
-use std::os::unix::fs::DirBuilderExt;
 
 fn run(mut command: Command, home: &Path) -> Result<i32, String> {
     let (listener, _lock, socket) = match bind(home) {
@@ -132,7 +96,7 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
         Err(_) => {
             // Optional remote creation must never prevent the original desktop from opening.
             eprintln!("ClawKit native endpoint unavailable; starting the original desktop engine");
-            return Err(command.exec().to_string());
+            return Ok(fallback(&mut command));
         }
     };
     let mut engine = command
@@ -147,8 +111,11 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
     let init_id = Arc::new(Mutex::new(None::<Value>));
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let prefix = format!("clawkit-native-{}-", uuid::Uuid::new_v4());
+    let events = Arc::new(Mutex::new(super::events::Events::new()));
+    let desktop_output = Arc::new(Mutex::new(std::io::stdout()));
     {
         let (input, ready, init_id) = (input.clone(), ready.clone(), init_id.clone());
+        let events = events.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(std::io::stdin());
             while let Ok(Some(line)) = read_line(&mut reader, 64 * 1024 * 1024) {
@@ -162,8 +129,12 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
                         *init_id.lock().unwrap() = value.get("id").cloned();
                     }
                 }
-                if send(&input, line.trim_ascii_end()).is_err() {
-                    break;
+                let mut state = events.lock().unwrap();
+                let message = serde_json::from_slice::<Value>(&line).ok();
+                if message.as_ref().is_some_and(|v| state.already_answered(v)) { continue; }
+                if send(&input, line.trim_ascii_end()).is_err() { break; }
+                if let Some(value) = message.filter(|v| v.get("method").is_none()) {
+                    state.resolve(&value["id"]);
                 }
             }
             ready.store(false, Ordering::SeqCst);
@@ -173,13 +144,14 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
     }
     {
         let (pending, ready, init_id) = (pending.clone(), ready.clone(), init_id.clone());
+        let events = events.clone();
         let prefix = prefix.clone();
+        let desktop_output = desktop_output.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(output);
-            let stdout = std::io::stdout();
-            let mut writer = stdout.lock();
             while let Ok(Some(line)) = read_line(&mut reader, 64 * 1024 * 1024) {
-                if let Ok(value) = serde_json::from_slice::<Value>(&line) {
+                if let Ok(mut value) = serde_json::from_slice::<Value>(&line) {
+                    events.lock().unwrap().observe(&value);
                     if value.get("method").is_none() {
                         if value.get("id").is_some()
                             && value.get("id") == init_id.lock().unwrap().as_ref()
@@ -190,12 +162,16 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
                         if let Some(id) = value["id"].as_str().filter(|id| id.starts_with(&prefix))
                         {
                             if let Some(tx) = pending.lock().unwrap().remove(id) {
+                                if value["result"].is_object() {
+                                    value["result"]["_clawkitStream"] = events.lock().unwrap().position();
+                                }
                                 let _ = tx.send(value);
                             }
                             continue;
                         }
                     }
                 }
+                let mut writer = desktop_output.lock().unwrap();
                 if writer
                     .write_all(&line)
                     .and_then(|_| writer.flush())
@@ -210,6 +186,7 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
     }
     {
         let (input, ready, pending) = (input.clone(), ready.clone(), pending.clone());
+        let events = events.clone();
         std::thread::spawn(move || {
             let count = Arc::new(AtomicUsize::new(0));
             for stream in listener.incoming().flatten() {
@@ -224,24 +201,28 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
                     count.clone(),
                     prefix.clone(),
                 );
+                let events = events.clone();
+                let desktop_output = desktop_output.clone();
                 std::thread::spawn(move || {
-                    let _ = serve(stream, &input, &ready, &pending, &prefix);
+                    let _ = serve(stream, &input, &ready, &pending, &prefix, &events, &desktop_output);
                     count.fetch_sub(1, Ordering::SeqCst);
                 });
             }
         });
     }
     let status = engine.wait().map_err(|e| e.to_string())?;
-    let _ = std::fs::remove_file(socket);
+    super::endpoint::cleanup(&socket);
     Ok(status.code().unwrap_or(1))
 }
 
 fn serve(
-    mut stream: UnixStream,
+    mut stream: Stream,
     input: &Input,
     ready: &AtomicBool,
     pending: &Pending,
     prefix: &str,
+    events: &EventState,
+    desktop_output: &DesktopOutput,
 ) -> Result<(), String> {
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
@@ -260,9 +241,32 @@ fn serve(
     let response = if !super::allowed(method, &value["params"]) {
         json!({"error":{"code":-32601}})
     } else if method == "clawkit/status" {
-        json!({"result":{"ready":connected,"protocolVersion":1}})
+        json!({"result":{"ready":connected,"protocolVersion":1,"eventProtocolVersion":1,"engineInstanceId":events.lock().unwrap().epoch}})
     } else if !connected {
         json!({"error":{"code":-32001}})
+    } else if method == "clawkit/notifications/read" {
+        json!({"result":events.lock().unwrap().reminders()})
+    } else if method == "clawkit/events/read" {
+        json!({"result":events.lock().unwrap().read(&value["params"])})
+    } else if method == "clawkit/request/respond" {
+        let mut state = events.lock().unwrap();
+        match state.response(&value["params"]) {
+            Ok(response) => {
+                // Reserve before writing: a partial write is never safe to repeat.
+                state.resolve(&response["id"]);
+                match send(input, &serde_json::to_vec(&response).map_err(|e| e.to_string())?) {
+                    Ok(()) => {
+                        let notification=json!({"method":"serverRequest/resolved","params":{"requestId":response["id"]}});
+                        if let Ok(mut writer)=desktop_output.lock() {
+                            let _=writeln!(writer,"{notification}").and_then(|_|writer.flush());
+                        }
+                        json!({"result":{"status":"submitted"}})
+                    }
+                    Err(_) => json!({"error":{"code":-32002,"message":"回答发送结果未知，请刷新请求状态"}}),
+                }
+            }
+            Err(message) => json!({"error":{"code":-32003,"message":message}}),
+        }
     } else {
         let id = format!("{prefix}{}", uuid::Uuid::new_v4());
         let (tx, rx) = mpsc::sync_channel(1);

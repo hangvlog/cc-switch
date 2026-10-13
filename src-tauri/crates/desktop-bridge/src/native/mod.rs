@@ -1,24 +1,54 @@
 //! Restricted access to the original desktop's initialized app-server connection.
-//! The desktop retains all notifications, tool requests and approvals.
+//! The desktop retains its connection; human replies are arbitrated by the adapter.
 pub(crate) mod creation;
+mod control;
+mod output;
+mod events;
+mod responses;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
-#[cfg(unix)]
 mod runtime;
-#[cfg(unix)]
 mod transport;
 #[cfg(unix)]
+#[path="endpoint_unix.rs"]
+mod endpoint;
+#[cfg(windows)]
+#[path="endpoint_windows.rs"]
+mod endpoint;
 pub use runtime::maybe_run_adapter;
-#[cfg(not(unix))]
-pub fn maybe_run_adapter() {}
 
 #[cfg(target_os = "macos")]
 mod launch;
-#[cfg(target_os = "macos")]
+#[cfg(windows)]
+#[path="launch_windows.rs"]
+mod launch;
+#[cfg(any(target_os = "macos",windows))]
 pub use launch::launch;
 
 pub(crate) fn socket_path(home: &Path) -> PathBuf {
-    home.join("clawkit-runtime").join("engine.sock")
+    #[cfg(unix)] {home.join("clawkit-runtime").join("engine.sock")}
+    #[cfg(windows)] {endpoint::socket_path(home)}
+}
+
+pub fn read_events(home: &Path, params: Value) -> Result<Value, String> {
+    request(home, "clawkit/events/read", params)
+}
+
+pub fn project_event_outputs(batch:&mut Value,storage:&Path)->Result<(),String> {
+    let attachments=crate::attachments::Attachments::open(storage)?;
+    for entry in batch["events"].as_array_mut().into_iter().flatten() {
+        let message=&mut entry["message"];
+        if matches!(message["method"].as_str(),Some("item/started"|"item/completed")) {
+            let item=&mut message["params"]["item"];
+            output::project(&attachments,item);
+            if item["type"]=="userMessage" {item["content"]=json!(attachments.project_content(&item["content"]));}
+        }
+    }
+    Ok(())
+}
+
+pub fn event_ready(home: &Path) -> bool {
+    request(home, "clawkit/status", json!({})).is_ok_and(|v|v["ready"]==true && v["eventProtocolVersion"]==1)
 }
 
 pub fn ready(home: &Path) -> bool {
@@ -27,15 +57,7 @@ pub fn ready(home: &Path) -> bool {
 }
 
 pub(crate) fn request(home: &Path, method: &str, params: Value) -> Result<Value, String> {
-    #[cfg(unix)]
-    {
-        transport::request(&socket_path(home), method, params)
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = (home, method, params);
-        Err("此系统尚未支持原生新建通道".into())
-    }
+    transport::request(&socket_path(home), method, params)
 }
 
 // The local endpoint is not a generic app-server proxy, even for an authenticated relay.
@@ -44,7 +66,16 @@ fn allowed(method: &str, params: &Value) -> bool {
         return false;
     };
     let keys: &[&str] = match method {
-        "clawkit/status" => &[],
+        "clawkit/status" | "clawkit/notifications/read" => &[],
+        "clawkit/events/read" => &["engineInstanceId", "afterSeq"],
+        "clawkit/request/respond" => &["engineInstanceId", "threadId", "serverRequestId", "decision", "answers", "content"],
+        "turn/interrupt" => &["threadId", "turnId"],
+        "thread/resume" => &["threadId", "excludeTurns", "initialTurnsPage"],
+        "turn/steer" => &["threadId", "expectedTurnId", "clientUserMessageId", "input"],
+        "thread/turns/list" => &["threadId", "cursor", "limit", "itemsView", "sortDirection"],
+        "thread/settings/update" => &["threadId", "model"],
+        "model/list" => &["includeHidden", "cursor", "limit"],
+        "project/list" => &["cursor", "limit"],
         "project/read" => &["projectId"],
         "thread/start" => &["projectId", "cwd"],
         "turn/start" => &["threadId", "clientUserMessageId", "input"],
