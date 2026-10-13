@@ -1,10 +1,10 @@
-use std::{path::Path, process::Command};
+use std::{path::Path};
 /// Configure only this launch. Never mutate Codex, global environment, credentials or config.
 pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     if !home.is_absolute() || !adapter.is_absolute() || !adapter.is_file() {
         return Err("Codex 启动路径无效".into());
     }
-    if super::ready(home) {
+    if super::ready(home) && crate::renderer::ready(home) {
         return Ok(());
     }
     if crate::version::running_pid(home).is_some() {
@@ -22,38 +22,6 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     if !engine.is_file() {
         return Err("此 Codex 安装结构尚未适配，未更改配置".into());
     }
-    let mut command = Command::new("/usr/bin/open");
-    command.arg("-n");
-    // LaunchServices does not inherit the caller's environment. Preserve an
-    // explicitly isolated desktop profile without touching global settings.
-    let profile = std::env::var_os("CODEX_ELECTRON_USER_DATA_PATH");
-    if let Some(profile) = &profile {
-        let path = Path::new(profile);
-        if !path.is_absolute() {
-            return Err("Codex 数据目录必须为绝对路径".into());
-        }
-        command.arg("--env").arg(format!(
-            "CODEX_ELECTRON_USER_DATA_PATH={}",
-            path.display()
-        ));
-    }
-    command
-        .arg("--env")
-        .arg(format!("CODEX_HOME={}", home.display()))
-        .arg("--env")
-        .arg(format!("CODEX_CLI_PATH={}", adapter.display()))
-        .arg("--env")
-        .arg(format!("CLAWKIT_CODEX_ENGINE={}", engine.display()))
-        .arg(app);
-    if let Some(profile) = profile {
-        command.arg("--args").arg(format!("--user-data-dir={}", Path::new(&profile).display()));
-    }
     crate::router_launch::ensure_before_launch(home, adapter)?;
-    let status = command.status()
-        .map_err(|_| "无法启动 Codex")?;
-    if status.success() {
-        Ok(())
-    } else {
-        Err("Codex 启动失败，原配置未更改".into())
-    }
+    crate::renderer::launch(home, adapter, app)
 }

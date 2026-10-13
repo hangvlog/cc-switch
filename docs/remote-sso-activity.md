@@ -64,3 +64,15 @@ Android 沿用相同 preview 签名（现有 debug certificate），不是商店
 回滚：Mobile 保留 0.1.33 产物，Android 降级需按平台规则处理，不能保证无损覆盖；Mac 保留本机 `.local/mobile-sso-recents-20261013/rollback/ClawKit Desktop 3.19.51.app`；Windows 保留 `C:\self\hang\desktop-352\install-acceptance` 中旧安装目录、注册表和快捷方式；后端四文件与生产环境配置备份在 `/tmp/clawkit-remote-release-be760a8f/rollback`。
 
 本机证据索引：`.local/mobile-sso-recents-20261013/` 下 `rea-evidence.json`、`installed-activity.json`、`mobile-034-acceptance.json`、`mobile-034-drawer.png`、`mobile-034-devices.png`、`windows-upgrade-result.json`、`backend-release.json` 和各产物下载校验记录。登录原始材料受本机权限保护，不纳入 Git 或发布包。
+
+## 0.1.35 未发布及后续修正
+
+0.1.35 已完成构建并保持 draft。它修正 Modal 生命周期和已读响应竞态，但正式 Android 包连接当前生产桌面时，真正未读任务的 markRead 未获确认。因此不能宣称 Desktop 3.19.52 的生产已读链路已经通过；早先已读任务返回 true 是提前返回，不能作为写入证明。
+
+REA 对照确认，官方活动视图的 nj 是窗口内存状态，包含保留顺序和冻结的近期时间。两端各自重建即使使用同一目录，也会因打开时刻不同而分叉。0.1.36 / Desktop 3.19.53 改为手机请求官方窗口中的原始活动状态；打开、关闭、清除调用官方相同状态函数，手机不再单独排序。状态不可用时明确提示，不伪造一致的列表。
+
+macOS 窗口接入通过继承的 Chromium debugging pipe，未开放 TCP 端口、未修改官方安装包、未写全局启动配置。仅允许活动 read/open/clear/close 和单个会话 markRead；手机不能发送 JavaScript。已读直接调用官方 threadReadState 服务并检查回执。适配先验证当前加载的两个 JS SHA-256，再选择已核对的函数；版本不匹配拒绝适配。Windows 尚未接入这条窗口状态通道。
+
+已完成的开发验证：官方同版本隔离窗口 true unread → confirmed read；活动重复打开保留 activatedAt，清除、关闭/重开；真实隔离 engine 新建三条无消息会话后，官方优先区顺序与窗口状态接口一致。手机相关定向回归和 TypeScript 检查通过。正式产物和手机链路验收尚待后续记录，以上不等于生产或真机验收。
+
+生产官方 PID 2126 仍保持运行，没有窗口私有管道。最终接入需要用户任务结束后正常退出官方应用，再从 ClawKit 打开；本次没有重启或中断生产任务。手机读取失败仍可打开对话，已读同步错误单独提示。

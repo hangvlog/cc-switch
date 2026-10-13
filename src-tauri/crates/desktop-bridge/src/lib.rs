@@ -25,6 +25,8 @@ mod router_launch;
 #[cfg(all(test, unix))]
 mod router_tests;
 pub mod native;
+#[cfg(target_os="macos")]
+mod renderer;
 mod outbox;
 mod queue;
 mod saved_history;
@@ -36,6 +38,8 @@ mod version;
 mod unread;
 
 pub fn maybe_run_router() {
+    #[cfg(target_os="macos")]
+    renderer::maybe_run();
     #[cfg(unix)]
     router_launch::maybe_run();
 }
@@ -180,6 +184,10 @@ impl Bridge {
             } else {self.notifications.lock().map_err(|_| "提醒状态不可用")?.read(&self.home)},
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/statuses" => thread_status::read(&self.home, params),
+            "desktop/activity/read" | "desktop/activity/open" | "desktop/activity/clear" | "desktop/activity/close" => {
+                #[cfg(target_os="macos")] { renderer::request(&self.home,method.rsplit('/').next().unwrap(),None) }
+                #[cfg(not(target_os="macos"))] { Err("此电脑尚不支持官方活动视图同步".into()) }
+            },
             "desktop/thread/markRead" => unread::mark_read(&self.home,self.thread(params)?),
             "desktop/thread/search" => self.search.query(&self.home, params["query"].as_str().ok_or("请输入搜索词")?),
             "desktop/thread/list" => {

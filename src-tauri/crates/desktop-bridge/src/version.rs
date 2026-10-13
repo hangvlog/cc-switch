@@ -13,11 +13,13 @@ pub(crate) fn running_pid(home: &Path) -> Option<i32> {
         .output()
         .ok()?;
     let pids = String::from_utf8(output.stdout).ok()?;
-    let pid = pids.lines().find_map(|line| line.strip_prefix('p'))?;
-    if !pid.chars().all(|c| c.is_ascii_digit()) {
-        return None;
-    }
-    pid.parse().ok()
+    // The prebound router outlives a window. It is not the official application.
+    pids.lines().filter_map(|line|line.strip_prefix('p')).filter_map(|pid|pid.parse::<i32>().ok()).find(|pid|{
+        Command::new("/bin/ps").args(["-p",&pid.to_string(),"-o","comm="]).output().ok()
+            .and_then(|o|String::from_utf8(o.stdout).ok()).is_some_and(|s|{
+                s.trim().ends_with("/ChatGPT.app/Contents/MacOS/ChatGPT") || s.trim().ends_with("/Codex.app/Contents/MacOS/Codex")
+            })
+    })
 }
 
 #[cfg(target_os = "macos")]

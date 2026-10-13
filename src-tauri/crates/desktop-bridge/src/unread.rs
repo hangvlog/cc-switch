@@ -72,6 +72,10 @@ pub fn annotate(home: &Path, threads: &mut [Value]) {
     }
 }
 pub fn mark_read(home: &Path, thread: &str) -> Result<Value, String> {
+    #[cfg(target_os="macos")]
+    if crate::renderer::ready(home) {
+        return crate::renderer::request(home,"markRead",Some(thread));
+    }
     let (before, ids) = bucket(home).ok_or("当前账号未读状态尚未就绪")?;
     if !ids.iter().any(|id| id == thread) {
         return Ok(json!({"read":true}));
