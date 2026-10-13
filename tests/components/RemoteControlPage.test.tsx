@@ -78,16 +78,10 @@ import {
 } from "@/components/remote/CodexEndpointSelector";
 
 async function login() {
-  await screen.findByLabelText("账号");
-  fireEvent.change(screen.getByLabelText("账号"), {
-    target: { value: "hang" },
-  });
-  fireEvent.change(screen.getByLabelText("密码"), {
-    target: { value: "secret" },
-  });
-  fireEvent.click(screen.getByRole("button", { name: "登录" }));
-  await screen.findByText("手机接续 Codex 原任务");
+  await userEvent.click(await screen.findByRole("button", { name: "使用统一账号登录" }));
+  await waitFor(() => expect(mocks.accountLogin).toHaveBeenCalledWith());
 }
+
 
 async function openConfiguration() {
   fireEvent.click(await screen.findByText("可选：使用 ClawKit 模型服务"));
@@ -173,7 +167,7 @@ describe("RemoteControlPage", () => {
   it("logs in without rewriting Codex configuration or launching a bridge", async () => {
     render(<RemoteControlPage />);
     await login();
-    expect(mocks.accountLogin).toHaveBeenCalledWith("hang", "secret");
+    expect(mocks.accountLogin).toHaveBeenCalledWith();
     expect(mocks.configure).not.toHaveBeenCalled();
     expect(mocks.modelOptions).not.toHaveBeenCalled();
     expect(mocks.enableOwner).not.toHaveBeenCalled();

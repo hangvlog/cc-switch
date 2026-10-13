@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod identity;
+mod sso;
 mod system_user;
 pub(crate) mod transport;
 
@@ -15,6 +16,7 @@ use transport::{http_client_builder, post_json_with_direct_fallback};
 const DEFAULT_ACCOUNT_API_BASE: &str = "https://image.clawkit.chat";
 const DEFAULT_RELAY_API_BASE: &str = "https://clawkit.chat";
 const SESSION_FILE: &str = "clawkit-account.json";
+#[cfg(test)]
 const PRODUCT: &str = "codex-remote";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,45 +81,6 @@ impl ClawkitAccountClient {
             Ok(session) => session_status(&session),
             Err(_) => json!({ "status": "ok", "authenticated": false }),
         }
-    }
-
-    pub async fn login(&self, username: &str, password: &str) -> Result<Value, String> {
-        let username = username.trim();
-        if username.is_empty() || password.is_empty() {
-            return Err("请输入账号和密码".to_string());
-        }
-        let device_id = identity::load_or_create(&self.session_path)?;
-        let (endpoint, payload) =
-            login_request(&self.account_api_base, username, password, &device_id);
-        let response =
-            post_json_with_direct_fallback(&self.client, &self.direct_client, &endpoint, &payload)
-                .await?;
-        let status = response.status();
-        let body = response.json::<Value>().await.unwrap_or(Value::Null);
-        if !status.is_success() || body.get("code").and_then(Value::as_i64) != Some(200) {
-            return Err(response_message(&body, status, "登录失败"));
-        }
-        let data = body.get("data").cloned().unwrap_or(Value::Null);
-        let token = data
-            .get("token")
-            .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| "登录响应缺少账号令牌".to_string())?;
-        let expires_in = data
-            .get("expires_in")
-            .and_then(Value::as_u64)
-            .unwrap_or(24 * 60 * 60);
-        let session = StoredSession {
-            token: token.to_string(),
-            user: data
-                .get("user")
-                .cloned()
-                .unwrap_or_else(|| json!({ "username": username })),
-            device_id,
-            expires_at: unix_timestamp().saturating_add(expires_in),
-        };
-        self.save_session(&session)?;
-        Ok(session_status(&session))
     }
 
     pub fn logout(&self) -> Result<Value, String> {
@@ -241,6 +204,7 @@ impl ClawkitAccountClient {
     }
 }
 
+#[cfg(test)]
 fn login_request(api_base: &str, login: &str, password: &str, device_id: &str) -> (String, Value) {
     if is_mainland_phone(login) {
         return (
@@ -264,6 +228,7 @@ fn login_request(api_base: &str, login: &str, password: &str, device_id: &str) -
     )
 }
 
+#[cfg(test)]
 fn is_mainland_phone(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 11

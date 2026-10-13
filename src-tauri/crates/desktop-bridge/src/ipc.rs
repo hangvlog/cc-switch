@@ -225,6 +225,49 @@ impl IpcClient {
         client.snapshot(thread, None)
     }
 
+    /// Discover a catalog batch concurrently on one passive connection. Dormant
+    /// entries share a deadline rather than imposing one timeout per row.
+    pub fn passive_batch(home: &Path, threads: &[&str], mut observe: impl FnMut(&str, &Value)) -> Result<(), String> {
+        #[cfg(unix)]
+        let mut client = Self::connect_with_timeout(home, Duration::from_millis(700))?;
+        #[cfg(not(unix))]
+        let mut client = Self::connect(home)?;
+        let deadline = Instant::now() + Duration::from_millis(1200);
+        let mut discoveries = std::collections::HashMap::new();
+        let mut owners = std::collections::HashMap::new();
+        for thread in threads {
+            let id=Uuid::new_v4().to_string();
+            client.send(&json!({"type":"request","requestId":id,"sourceClientId":client.client_id,
+                "version":1,"method":"thread-owner-discovery","timeoutMs":700,
+                "params":{"hostId":"local","conversationId":thread}}))?;
+            discoveries.insert(id,*thread);
+        }
+        while Instant::now()<deadline && (!discoveries.is_empty() || !owners.is_empty()) {
+            let event=match client.receive(deadline) {Ok(e)=>e,Err(_)=>break};
+            client.decline_discovery(&event)?;
+            if event["type"]=="response" {
+                if let Some(thread)=event["requestId"].as_str().and_then(|id|discoveries.remove(id)) {
+                    if event["resultType"]=="success" {
+                        if let Some(owner)=event["handledByClientId"].as_str() {
+                            client.follow(thread,owner,true)?; owners.insert(thread,owner.to_owned());
+                        }
+                    }
+                }
+            } else if event["method"]=="thread-stream-state-changed" && event["version"]==11 {
+                let params=&event["params"];
+                if let Some(thread)=params["conversationId"].as_str() {
+                    if owners.get(thread).is_some_and(|owner|event["sourceClientId"]==*owner)
+                        && params["change"]["type"]=="snapshot" && params["change"]["conversationState"]["id"]==thread {
+                        observe(thread,&params["change"]["conversationState"]);
+                        if let Some(owner)=owners.remove(thread) {let _=client.follow(thread,&owner,false);}
+                    }
+                }
+            }
+        }
+        for (thread,owner) in owners {let _=client.follow(thread,&owner,false);}
+        Ok(())
+    }
+
     /// Only the explicit activation path may load a dormant conversation. Sending and
     /// receipt reconciliation still require an already discovered original owner.
     pub fn open_snapshot(home: &Path, thread: &str) -> Result<Snapshot, String> {

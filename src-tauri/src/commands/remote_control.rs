@@ -288,11 +288,9 @@ pub fn get_clawkit_account_status() -> Value {
 #[tauri::command]
 pub async fn login_clawkit_account(
     app: AppHandle,
-    username: String,
-    password: String,
 ) -> Result<Value, String> {
     let status = crate::clawkit_account::ClawkitAccountClient::default()
-        .login(&username, &password)
+        .login_sso(&app)
         .await?;
     crate::desktop_remote::restore(&app);
     Ok(status)
@@ -301,7 +299,11 @@ pub async fn login_clawkit_account(
 #[tauri::command]
 pub fn logout_clawkit_account(app: AppHandle) -> Result<Value, String> {
     crate::desktop_remote::sign_out(&app)?;
-    crate::clawkit_account::ClawkitAccountClient::default().logout()
+    use tauri_plugin_opener::OpenerExt;
+    let account=crate::clawkit_account::ClawkitAccountClient::default();
+    let status=account.logout()?;
+    app.opener().open_url(account.sso_logout_url(),None::<String>).map_err(|_| "已退出本机，但无法打开统一退出页面".to_string())?;
+    Ok(status)
 }
 
 #[tauri::command]

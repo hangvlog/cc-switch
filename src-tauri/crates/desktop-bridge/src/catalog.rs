@@ -48,7 +48,9 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
     } else {
         "t.updated_at"
     };
-    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY {activity} DESC,t.id LIMIT 51 OFFSET ?1");
+    let transcript = if columns.iter().any(|c|c=="rollout_path") { "t.rollout_path" } else { "NULL" };
+    let thread_source = if columns.iter().any(|c|c=="thread_source") { "t.thread_source" } else { "NULL" };
+    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra},{transcript},{thread_source} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY {activity} DESC,t.id LIMIT 51 OFFSET ?1");
     let mut query = connection
         .prepare(&sql)
         .map_err(|_| "Codex 任务索引结构已变化")?;
@@ -56,7 +58,7 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
         "preview":row.get::<_,String>(1)?,"cwd":row.get::<_,String>(2)?,"createdAt":row.get::<_,i64>(3)?,
         "updatedAt":row.get::<_,f64>(4)?,"name":row.get::<_,Option<String>>(5)?,
         "projectId":row.get::<_,Option<String>>(6)?,"isPinned":row.get::<_,bool>(7)?,
-        "pinnedPosition":row.get::<_,Option<i64>>(8)?,"turns":[],"desktop":{"source":"catalog","status":"unknown","canSend":false}})))
+        "pinnedPosition":row.get::<_,Option<i64>>(8)?,"threadSource":row.get::<_,Option<String>>(10)?,"_rollout":row.get::<_,Option<String>>(9)?,"turns":[],"desktop":{"source":"catalog","status":"unknown","canSend":false}})))
         .map_err(|e| e.to_string())?;
     let mut data = rows
         .collect::<Result<Vec<_>, _>>()
@@ -67,11 +69,20 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
     } else {
         None
     };
+    for thread in &mut data {
+        if let (Some(id),Some(path))=(thread["id"].as_str(),thread["_rollout"].as_str()) {
+            if let Some(activity)=crate::activity::read(home,id,path) {
+                thread["latestReply"]=activity["summary"].clone();
+            }
+        }
+        thread.as_object_mut().unwrap().remove("_rollout");
+    }
     crate::unread::annotate(home,&mut data);
+    crate::activity_automations::annotate(home, &mut data);
     let sidebar = if modern {
         let projects = crate::sidebar::projects(&connection)?;
         crate::sidebar::assign_projects(home, &mut data, &projects);
-        Some(json!({"version":1,"projects":projects}))
+        Some(json!({"version":1,"projects":projects,"activity":crate::sidebar::activity_options(home)}))
     } else {
         None
     };
@@ -120,7 +131,17 @@ mod tests {
             state.to_string(),
         )
         .unwrap();
+        std::fs::create_dir(root.path().join("sqlite")).unwrap();
+        let automation=Connection::open(root.path().join("sqlite/codex-dev.db")).unwrap();
+        automation.execute_batch("CREATE TABLE automations(id TEXT,account_id TEXT,user_id TEXT,installation_id TEXT,kind TEXT,status TEXT,target_thread_id TEXT);
+            CREATE TABLE automation_runs(thread_id TEXT,automation_id TEXT,status TEXT,read_at INTEGER,created_at INTEGER);
+            INSERT INTO automations VALUES('local',NULL,NULL,NULL,'heartbeat','ACTIVE','thread-59'),('other','other-account','u','i','heartbeat','ACTIVE','thread-58');
+            INSERT INTO automation_runs VALUES('thread-57','local','PENDING_REVIEW',NULL,1),('thread-56','other','PENDING_REVIEW',NULL,1);").unwrap();
         let first = list(root.path(), 0).unwrap();
+        assert_eq!(first["data"][0]["hasActiveHeartbeat"],true);
+        assert_eq!(first["data"][1]["hasActiveHeartbeat"],false);
+        assert_eq!(first["data"][2]["isScheduled"],true);
+        assert_eq!(first["data"][3]["isScheduled"],false);
         assert_eq!(first["data"].as_array().unwrap().len(), 50);
         assert_eq!(first["data"][0]["name"], "Renamed 59");
         assert_eq!(first["data"][0]["projectId"], "project-1");

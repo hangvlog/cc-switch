@@ -1,6 +1,8 @@
 //! ClawKit's deliberately small, versioned adapter to an existing Codex desktop.
 //! Native creation shares the original initialized engine; no independent engine fallback.
 mod attachments;
+mod activity;
+mod activity_automations;
 mod catalog;
 mod conditional_read;
 mod clarification;

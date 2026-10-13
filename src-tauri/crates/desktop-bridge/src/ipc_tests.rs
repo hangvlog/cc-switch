@@ -194,3 +194,28 @@ fn unified_router_routes_discovery_responses_and_targeted_broadcasts() {
     // The router's routing table test uses real framed sockets and never touches Codex.
     crate::router_tests::test_routing(client,owner,&mut peer,&mut target);
 }
+
+#[test]
+fn passive_batch_checks_owner_and_unfollows_without_activating() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("ipc")).unwrap();
+    let listener = UnixListener::bind(root.path().join("ipc/ipc.sock")).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let init = read(&mut stream); reply(&mut stream, &init, json!({"clientId":"follower"}));
+        let first = read(&mut stream); let second = read(&mut stream);
+        assert_eq!(first["method"], "thread-owner-discovery");
+        assert_eq!(second["method"], "thread-owner-discovery");
+        reply(&mut stream, &first, json!({}));
+        write(&mut stream, json!({"type":"response","requestId":second["requestId"],"resultType":"error","error":"no-client-found"}));
+        assert_eq!(read(&mut stream)["params"]["following"], true);
+        for source in ["wrong-owner", "owner"] {
+            write(&mut stream,json!({"type":"broadcast","method":"thread-stream-state-changed","version":11,"sourceClientId":source,
+                "params":{"hostId":"local","conversationId":"first","change":{"type":"snapshot","conversationState":{"id":"first"}}}}));
+        }
+        assert_eq!(read(&mut stream)["params"]["following"], false);
+    });
+    let mut received=Vec::new();
+    IpcClient::passive_batch(root.path(), &["first","dormant"], |id,_|received.push(id.to_owned())).unwrap();
+    assert_eq!(received,vec!["first"]); server.join().unwrap();
+}

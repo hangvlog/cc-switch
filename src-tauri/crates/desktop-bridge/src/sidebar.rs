@@ -20,7 +20,11 @@ pub fn assign_projects(home: &Path, threads: &mut [Value], projects: &[Value]) {
     let Some(state) = state else { return };
     let host = format!("local:{}", home.display());
     let migrated = &state["app-server-project-id-by-legacy-project-id-by-host"][&host];
+    let atoms = &state["electron-persisted-atom-state"];
     for thread in threads {
+        if let Some(id)=thread["id"].as_str() {
+            thread["userActivityAtMs"]=atoms["thread-user-activity-times-v1"][json!(["local",id]).to_string()].clone();
+        }
         if thread["projectId"].is_string() {
             continue;
         }
@@ -64,4 +68,16 @@ pub fn projects(connection: &Connection) -> Result<Vec<Value>, String> {
         projects.push(json!({"id":id,"name":name,"roots":paths}));
     }
     Ok(projects)
+}
+
+/// Versioned preferences only; never export arbitrary persisted atoms.
+pub fn activity_options(home: &Path) -> Value {
+    let state=std::fs::File::open(home.join(".codex-global-state.json")).ok().and_then(|file| {
+        let mut bytes=Vec::new(); file.take(8*1024*1024+1).read_to_end(&mut bytes).ok()?;
+        if bytes.len()>8*1024*1024 {return None;} serde_json::from_slice::<Value>(&bytes).ok()
+    }).unwrap_or(Value::Null);
+    let atoms=&state["electron-persisted-atom-state"];
+    json!({"showPriority":atoms["sidebar-priority-show-priority-v1"]!=false,
+        "showPinned":atoms["sidebar-priority-show-pinned-v1"]==true,
+        "showScheduled":atoms["sidebar-priority-show-scheduled-v1"]==true})
 }

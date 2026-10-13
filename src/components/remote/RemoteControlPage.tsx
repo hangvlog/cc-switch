@@ -137,10 +137,10 @@ export function RemoteControlPage() {
     }
   };
 
-  const login = async (username: string, password: string) => {
+  const login = async () => {
     setLoginBusy(true);
     try {
-      const session = await remoteAccountApi.login(username, password);
+      const session = await remoteAccountApi.login();
       setAccount(session);
       toast.success("登录成功，可启用手机远程");
     } catch (error) {
