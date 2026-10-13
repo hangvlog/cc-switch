@@ -4,7 +4,7 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     if !home.is_absolute() || !adapter.is_absolute() || !adapter.is_file() {
         return Err("Codex 启动路径无效".into());
     }
-    if super::ready(home) && crate::renderer::ready(home) {
+    if crate::renderer::request(home,"status",None).is_ok_and(|v|v["running"]==true) {
         return Ok(());
     }
     if crate::version::running_pid(home).is_some() {

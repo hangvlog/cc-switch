@@ -275,11 +275,14 @@ pub fn sign_out(app: &AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn launch_original_codex() -> Result<(), String> {
+pub async fn launch_original_codex() -> Result<Value, String> {
     #[cfg(any(target_os = "macos",windows))]
     {
         let adapter = std::env::current_exe().map_err(|_| "无法定位 ClawKit 运行程序")?;
-        let result = clawkit_desktop_bridge::native::launch(&codex_home(), &adapter);
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            clawkit_desktop_bridge::native::launch(&codex_home(), &adapter)?;
+            Bridge::open(&codex_home(), &storage())?.dispatch("desktop/status", &json!({}))
+        }).await.map_err(|_| "启动检查未完成".to_string())?;
         crate::desktop_remote_log::report(if result.is_ok() {
             "native-launch-requested"
         } else {

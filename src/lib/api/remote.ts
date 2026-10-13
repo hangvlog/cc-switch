@@ -46,6 +46,7 @@ export interface DesktopCapabilities {
   canSend: boolean;
   socketAvailable: boolean;
   nativeCreation?: boolean;
+  activity?: { ready: boolean; running?: boolean; reason?: string | null };
   codexHome: string;
 }
 
@@ -55,7 +56,7 @@ export const remoteApi = {
     invoke<DesktopCapabilities>("get_desktop_remote_capabilities"),
   enableOwner: (enabled: boolean) =>
     invoke<DesktopRemoteStatus>("set_desktop_remote_enabled", { enabled }),
-  launchOriginal: () => invoke<void>("launch_original_codex"),
+  launchOriginal: () => invoke<DesktopCapabilities>("launch_original_codex"),
   configurationStatus: () =>
     invoke<ClawkitCodexConfigurationStatus>(
       "get_clawkit_codex_configuration_status",

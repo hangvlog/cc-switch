@@ -203,6 +203,22 @@ describe("RemoteControlPage", () => {
     expect(mocks.launchPlusPlus).not.toHaveBeenCalled();
   });
 
+  it("keeps launch pending separate from activity compatibility and prevents duplicate clicks", async () => {
+    let finish!: (value: unknown) => void;
+    mocks.launchOriginal.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    render(<RemoteControlPage />);
+    await login();
+    fireEvent.click(screen.getByRole("button", { name: "打开 Codex" }));
+    expect(screen.getByRole("button", { name: "正在打开…" })).toBeDisabled();
+    finish({ canSend: true, nativeCreation: true, activity: {ready:false,reason:"当前官方版本尚未适配活动同步"} });
+    await screen.findByText(/活动同步未就绪：当前官方版本尚未适配活动同步/);
+    expect(mocks.toastError).not.toHaveBeenCalled();
+    expect(mocks.toastWarning).toHaveBeenCalled();
+    expect(mocks.launchOriginal).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/支持任务续聊、运行中追加指令和下一轮排队/)).toBeInTheDocument();
+    expect(screen.getByText(/--clawkit-open-codex/)).toBeInTheDocument();
+  });
+
   it("defaults to sol and applies a different account model from the selector", async () => {
     mocks.accountStatus.mockResolvedValue({
       status: "ok",

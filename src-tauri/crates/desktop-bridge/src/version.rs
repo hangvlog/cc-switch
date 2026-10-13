@@ -71,7 +71,11 @@ pub fn can_send(home: &Path) -> bool {
 
 pub fn status(home: &Path) -> Value {
     let build = running_build(home);
-    json!({"mode":"desktop-owner","build":build,"compatibility":"operation-protocol",
+    #[cfg(target_os="macos")]
+    let activity=crate::renderer::request(home,"status",None).unwrap_or_else(|reason|json!({"ready":false,"reason":reason}));
+    #[cfg(not(target_os="macos"))]
+    let activity=json!({"ready":false,"reason":"此系统尚未支持官方活动视图同步"});
+    json!({"mode":"desktop-owner","build":build,"activity":activity,"compatibility":"operation-protocol",
         "canSend":can_send(home),"codexHome":home,
         "socketAvailable":home.join("ipc/ipc.sock").exists(),"nativeCreation":crate::native::ready(home)})
 }

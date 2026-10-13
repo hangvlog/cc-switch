@@ -3,6 +3,7 @@
 mod pipe;
 mod bind;
 use serde_json::{json,Value};
+use std::sync::{Arc,Mutex,mpsc};
 use std::{io::{BufRead,BufReader,Read,Write},os::unix::{fs::{DirBuilderExt,MetadataExt,OpenOptionsExt,PermissionsExt},net::{UnixListener,UnixStream}},os::fd::AsRawFd,path::{Path,PathBuf},process::{Command,Stdio},time::{Duration,Instant}};
 const UNAVAILABLE:&str="活动同步尚未接入当前官方窗口；任务结束后请正常退出 Codex，再从 ClawKit 打开";
 fn endpoint(home:&Path)->PathBuf{home.join("clawkit-runtime/activity.sock")}
@@ -11,7 +12,7 @@ pub fn request(home:&Path,action:&str,thread:Option<&str>)->Result<Value,String>
     let path=endpoint(home);
     if !private(path.parent().ok_or(UNAVAILABLE)?)||!private(&path){return Err(UNAVAILABLE.into())}
     let mut stream=UnixStream::connect(path).map_err(|_|UNAVAILABLE)?;
-    stream.set_read_timeout(Some(Duration::from_secs(20))).map_err(|e|e.to_string())?;
+    stream.set_read_timeout(Some(Duration::from_secs(if action=="status" {2} else {20}))).map_err(|e|e.to_string())?;
     stream.set_write_timeout(Some(Duration::from_secs(2))).map_err(|e|e.to_string())?;
     writeln!(stream,"{}",json!({"action":action,"threadId":thread})).map_err(|_|UNAVAILABLE)?;
     let mut data=String::new();BufReader::new(stream).take(4*1024*1024).read_line(&mut data).map_err(|_|UNAVAILABLE)?;
@@ -27,16 +28,19 @@ pub fn maybe_run(){
     std::process::exit(if result.is_ok(){0}else{2});
 }
 pub fn launch(home:&Path,adapter:&Path,app:&Path)->Result<(),String>{
-    let _child=Command::new(adapter).arg("--clawkit-window-host").arg(home).arg(adapter).arg(app)
+    if request(home,"status",None).is_ok_and(|v|v["running"]==true){return Ok(())}
+    let mut child=Command::new(adapter).arg("--clawkit-window-host").arg(home).arg(adapter).arg(app)
         .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map_err(|_|"无法启动窗口同步")?;
-    // Readiness is reported by the service. Never stop official work on timeout.
-    let deadline=Instant::now()+Duration::from_secs(30);
+    // Application launch and renderer compatibility are separate outcomes.
+    let deadline=Instant::now()+Duration::from_secs(12);
     while Instant::now()<deadline {
-        if ready(home){return Ok(())}
-        std::thread::sleep(Duration::from_millis(200));
+        if request(home,"status",None).is_ok_and(|v|v["running"]==true){return Ok(())}
+        if child.try_wait().map_err(|_|"无法检查启动进程")?.is_some(){return Err("Codex 启动进程已退出，请检查应用安装；未关闭现有任务".into())}
+        std::thread::sleep(Duration::from_millis(100));
     }
-    Err("Codex 已启动，但活动同步尚未就绪，请稍后重试连接".into())
+    Err("启动结果暂未确认，请先检查 Codex 窗口；不要重复启动".into())
 }
+
 fn serve(home:&Path,adapter:&Path,app:&Path)->Result<(),String>{
     let dir=home.join("clawkit-runtime");
     if !dir.exists(){std::fs::DirBuilder::new().mode(0o700).create(&dir).map_err(|e|e.to_string())?;}
@@ -58,11 +62,45 @@ fn serve(home:&Path,adapter:&Path,app:&Path)->Result<(),String>{
         cmd.arg(format!("--user-data-dir={}",Path::new(&profile).display()));
     }
     let(mut pipe,mut child)=pipe::Pipe::launch(&mut cmd)?;
+    // Keep status responsive even when Chromium initialization times out.
+    let pid=child.id();
+    let health=Arc::new(Mutex::new(json!({"running":true,"pid":pid,"ready":false,"reason":null})));
+    let status=health.clone();
+    let (send,receive)=mpsc::sync_channel::<(UnixStream,Value)>(16);
+    std::thread::spawn(move || loop {
+        if !matches!(child.try_wait(),Ok(None)) {
+            *status.lock().unwrap()=json!({"running":false,"pid":pid,"ready":false,"reason":"Codex 已退出"});
+            break;
+        }
+        match listener.accept() {
+            Ok((mut stream,_))=>{
+                let _=stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let _=stream.set_write_timeout(Some(Duration::from_secs(2)));
+                let mut line=String::new();
+                let request=BufReader::new(&stream).take(4096).read_line(&mut line).ok()
+                    .and_then(|_|serde_json::from_str::<Value>(&line).ok());
+                match request {
+                    Some(req) if req["action"]=="status"=>{
+                        let value=status.lock().unwrap().clone();
+                        let _=writeln!(stream,"{}",json!({"result":value}));
+                    },
+                    Some(_) if status.lock().unwrap()["ready"]!=true=>{let _=writeln!(stream,"{}",json!({"error":UNAVAILABLE}));},
+                    Some(req)=>match send.try_send((stream,req)) {
+                        Ok(())=>{},
+                        Err(mpsc::TrySendError::Full((mut stream,_)))=>{let _=writeln!(stream,"{}",json!({"error":"窗口请求繁忙，请稍后重试"}));},
+                        Err(mpsc::TrySendError::Disconnected(_))=>break,
+                    },
+                    None=>{let _=writeln!(stream,"{}",json!({"error":"窗口请求无效"}));},
+                }
+            },
+            Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(25)),
+            Err(_)=>break,
+        }
+    });
     let mut session:Option<String>=None;
-    let mut init_error=None;
-    let mut retry=Instant::now();
+    let mut retry=Instant::now()+Duration::from_millis(500);
     loop {
-        if child.try_wait().map_err(|e|e.to_string())?.is_some(){break}
+        if health.lock().unwrap()["running"]!=true {break}
         if session.is_none()&&Instant::now()>=retry {
             let mut initialize=||->Result<String,String>{
                 let targets=pipe.call("Target.getTargets",json!({}),None)?;
@@ -72,32 +110,29 @@ fn serve(home:&Path,adapter:&Path,app:&Path)->Result<(),String>{
                 let id=attached["sessionId"].as_str().ok_or("官方窗口连接失败")?.to_owned();
                 bind::install(&mut pipe,&id)?;Ok(id)
             };
-            match initialize(){Ok(id)=>{session=Some(id);init_error=None},Err(error)=>init_error=Some(error)}
+            let init_error=match initialize(){Ok(id)=>{session=Some(id);None},Err(error)=>Some(error)};
+            let mut state=health.lock().unwrap();
+            state["ready"]=json!(session.is_some()&&state["running"]==true);
+            state["reason"]=json!(init_error);
             retry=Instant::now()+Duration::from_secs(3);
         }
-        match listener.accept(){
-            Ok((mut stream,_))=>{
-                let _=stream.set_read_timeout(Some(Duration::from_secs(2)));
-                let _=stream.set_write_timeout(Some(Duration::from_secs(2)));
-                let mut line=String::new();
+        match receive.try_recv(){
+            Ok((mut stream,req))=>{
                 let result=(||->Result<Value,String>{
-                    BufReader::new(&stream).take(4096).read_line(&mut line).map_err(|_|"请求不完整")?;
-                    let req:Value=serde_json::from_str(&line).map_err(|_|"请求无效")?;
                     let action=req["action"].as_str().ok_or("操作缺失")?;
-                    if action=="status"{return Ok(json!({"ready":session.is_some(),"reason":init_error}))}
                     if !matches!(action,"read"|"open"|"clear"|"close"|"markRead"){return Err("不支持的窗口操作".into())}
                     if action=="markRead"&&req["threadId"].as_str().is_none_or(|id|uuid::Uuid::parse_str(id).is_err()){return Err("任务 ID 无效".into())}
                     let id=session.as_deref().ok_or(UNAVAILABLE)?;
                     let expression=format!("globalThis.__clawkitActivity({},{})",json!(action),req["threadId"]);
                     match pipe.evaluate(id,&expression) {
                         Ok(value)=>Ok(value),
-                        Err(error)=>{session=None;retry=Instant::now();Err(error)}
+                        Err(error)=>{session=None;{let mut state=health.lock().unwrap();state["ready"]=json!(false);state["reason"]=json!(error);}retry=Instant::now();Err(error)}
                     }
                 })();
                 let response=match result{Ok(result)=>json!({"result":result}),Err(error)=>json!({"error":error})};
                 let _=writeln!(stream,"{response}");
             },
-            Err(e) if e.kind()==std::io::ErrorKind::WouldBlock=>std::thread::sleep(Duration::from_millis(25)),
+            Err(mpsc::TryRecvError::Empty)=>std::thread::sleep(Duration::from_millis(25)),
             Err(_)=>break,
         }
     }

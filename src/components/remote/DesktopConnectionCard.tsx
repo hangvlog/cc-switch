@@ -27,6 +27,7 @@ export function DesktopConnectionCard() {
     null,
   );
   const [busy, setBusy] = useState(false);
+  const [launching, setLaunching] = useState(false);
   useEffect(() => {
     let disposed = false;
     const refresh = async () => {
@@ -60,6 +61,16 @@ export function DesktopConnectionCard() {
       setBusy(false);
     }
   };
+  const launch = async () => {
+    setLaunching(true);
+    try {
+      const next = await remoteApi.launchOriginal();
+      setCapabilities(next);
+      if (next?.activity?.ready) toast.success("Codex 已运行，活动同步已连接");
+      else toast.warning("已发起 Codex 启动；活动同步状态会单独刷新");
+    } catch (error) { toast.error(String(error)); }
+    finally { setLaunching(false); }
+  };
   return (
     <Card>
       <CardHeader>
@@ -85,13 +96,10 @@ export function DesktopConnectionCard() {
           </Button>
           <Button
             variant="outline"
-            onClick={() =>
-              void remoteApi
-                .launchOriginal()
-                .catch((error) => toast.error(String(error)))
-            }
+            disabled={launching}
+            onClick={() => void launch()}
           >
-            打开 Codex
+            {launching ? "正在打开…" : "打开 Codex"}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
@@ -104,6 +112,14 @@ export function DesktopConnectionCard() {
               ? "支持任务续聊、运行中追加指令和下一轮排队。"
               : "支持空闲任务续聊。"
             : "电脑任务连接尚未就绪，当前仅提供读取。"}
+        </p>
+        <p className="text-xs text-muted-foreground" role="status">
+          {capabilities?.activity?.ready ? "活动视图与已读同步已连接。" : `活动同步未就绪：${capabilities?.activity?.reason || "等待官方窗口接入"}。项目与历史仍可查看，可用的任务操作以连接状态为准。`}
+        </p>
+        <p className="text-xs text-muted-foreground">
+          macOS 启动按钮不可用时，可在终端运行：
+          <code className="block break-all">/Applications/ClawKit\ Desktop.app/Contents/MacOS/cc-switch --clawkit-open-codex</code>
+          此入口不加载设置界面。远程连接仍需 ClawKit 后台运行。
         </p>
         <p className="text-xs text-muted-foreground">
           {capabilities?.nativeCreation

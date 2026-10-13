@@ -36,10 +36,14 @@ mod thread_status;
 mod task_files;
 mod version;
 mod unread;
+#[cfg(target_os="macos")]
+mod launch_cli;
 
 pub fn maybe_run_router() {
     #[cfg(target_os="macos")]
     renderer::maybe_run();
+    #[cfg(target_os="macos")]
+    launch_cli::maybe_run();
     #[cfg(unix)]
     router_launch::maybe_run();
 }
