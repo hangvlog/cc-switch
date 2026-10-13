@@ -177,7 +177,7 @@ async fn relay(
     .map_err(|_| ())?;
     phase(app, state, "waiting");
     let (responses, mut outbound) = tokio::sync::mpsc::channel::<Value>(64);
-    let event_task = tauri::async_runtime::spawn(events::pump(codex_home(), storage().join("accounts").join(expected_scope), responses.clone()));
+    let event_task = tauri::async_runtime::spawn(events::pump(bridge.lock().expect("bridge").owner_streams(), codex_home(), storage().join("accounts").join(expected_scope), responses.clone()));
     struct Abort(tauri::async_runtime::JoinHandle<()>);
     impl Drop for Abort { fn drop(&mut self) { self.0.abort(); } }
     let _event_task = Abort(event_task);

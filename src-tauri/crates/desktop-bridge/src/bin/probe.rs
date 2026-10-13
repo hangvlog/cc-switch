@@ -44,6 +44,19 @@ fn main() -> Result<(), String> {
         );
         return Ok(());
     }
+    if std::env::args().nth(1).as_deref() == Some("--owner-stream") {
+        let thread=std::env::args().nth(2).ok_or("Missing thread")?;
+        let watch=uuid::Uuid::new_v4().to_string();
+        bridge.dispatch("desktop/owner/watch",&json!({"threadId":thread,"watchId":watch}))?;
+        let streams=bridge.owner_streams();let until=std::time::Instant::now()+std::time::Duration::from_secs(40);
+        while std::time::Instant::now()<until {
+            for event in streams.drain() {let t=&event["params"]["thread"];
+                println!("{}",json!({"sequence":event["params"]["sequence"],"revision":t["desktop"]["revision"],"source":t["desktop"]["source"],"status":t["desktop"]["status"],"bytes":event.to_string().len()}));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        bridge.dispatch("desktop/owner/unwatch",&json!({"threadId":thread,"watchId":watch}))?;return Ok(());
+    }
     if std::env::args().nth(1).as_deref() == Some("--models") {
         println!("{}", bridge.dispatch("desktop/model/list", &json!({}))?);
         return Ok(());

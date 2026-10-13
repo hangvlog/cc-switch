@@ -24,7 +24,7 @@ type Stream = crate::native::endpoint::Stream;
 type Stream = std::fs::File;
 
 pub struct IpcClient {
-    stream: Stream,
+    pub(super) stream: Stream,
     client_id: String,
     timeout: Duration,
 }
@@ -156,7 +156,7 @@ impl IpcClient {
         serde_json::from_slice(&body).map_err(|_| "Codex IPC 响应格式不兼容".into())
     }
 
-    fn decline_discovery(&mut self, event: &Value) -> Result<(), String> {
+    pub(super) fn decline_discovery(&mut self, event: &Value) -> Result<(), String> {
         if event["type"] == "client-discovery-request" {
             self.send(
                 &json!({"type":"client-discovery-response", "requestId":event["requestId"],
@@ -311,7 +311,7 @@ impl IpcClient {
         Err("Codex 正在加载原对话，请稍后再打开".into())
     }
 
-    fn follow(&mut self, thread: &str, owner: &str, following: bool) -> Result<(), String> {
+    pub(super) fn follow(&mut self, thread: &str, owner: &str, following: bool) -> Result<(), String> {
         self.send(
             &json!({"type":"broadcast", "method":"thread-stream-following-changed",
             "sourceClientId":self.client_id, "targetClientIds":[owner], "version":1,

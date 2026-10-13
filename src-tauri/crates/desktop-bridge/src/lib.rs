@@ -30,6 +30,8 @@ mod renderer;
 mod outbox;
 mod owner_control;
 mod owner_output;
+mod owner_patches;
+pub mod owner_stream;
 mod queue;
 mod saved_history;
 mod search;
@@ -66,6 +68,8 @@ pub fn now_ms() -> u64 {
 }
 
 pub struct Bridge {
+    owner_streams: owner_stream::OwnerStreams,
+    output_storage: PathBuf,
     notifications: std::sync::Mutex<notifications::Notifications>,
     home: PathBuf,
     search: search::Search,
@@ -91,7 +95,10 @@ impl Bridge {
             return Err("CODEX_HOME 必须是绝对路径".into());
         }
         let ledger = ledger::Ledger::open(storage)?;
+        let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         Ok(Self {
+            owner_streams: owner_stream::OwnerStreams::new(enabled.clone()),
+            output_storage: queue_storage.into(),
             notifications: std::sync::Mutex::new(notifications::Notifications::default()),
             home: home.into(),
             ledger,
@@ -100,9 +107,11 @@ impl Bridge {
             queue: queue::Queue::open(queue_storage)?,
             attachments: attachments::Attachments::open(queue_storage)?,
             search: search::Search::open(queue_storage)?,
-            enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            enabled,
         })
     }
+
+    pub fn owner_streams(&self) -> owner_stream::OwnerStreams { self.owner_streams.clone() }
 
     pub fn enable_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
         self.enabled.clone()
@@ -153,12 +162,14 @@ impl Bridge {
         match method {
             "initialize" => { let event_ready=native::event_ready(&self.home); let owner_ready=version::can_send(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,
+                "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,"ownerStream":!event_ready&&owner_ready,
                 "taskFileRead":true,"imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready||owner_ready,"approvals":event_ready||owner_ready}})) },
             "desktop/events/read" => {
                 let mut batch=native::read_events(&self.home,params.clone())?;
                 self.project_events(&mut batch);Ok(batch)
             },
+            "desktop/owner/watch" => self.owner_streams.watch(&self.home,&self.output_storage,self.thread(params)?,params["watchId"].as_str().ok_or("Missing watch ID")?),
+            "desktop/owner/unwatch" => { self.owner_streams.unwatch(self.thread(params)?,params["watchId"].as_str().ok_or("Missing watch ID")?); Ok(json!({"ok":true})) },
             "desktop/owner/respond" => {
                 owner_control::respond(&self.home,self.thread(params)?,params)
             }
