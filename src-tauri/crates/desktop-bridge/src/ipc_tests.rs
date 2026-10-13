@@ -219,3 +219,42 @@ fn passive_batch_checks_owner_and_unfollows_without_activating() {
     IpcClient::passive_batch(root.path(), &["first","dormant"], |id,_|received.push(id.to_owned())).unwrap();
     assert_eq!(received,vec!["first"]); server.join().unwrap();
 }
+
+#[test]
+fn reads_official_snapshot_larger_than_legacy_32_mib() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::create_dir(root.path().join("ipc")).unwrap();
+    let listener = UnixListener::bind(root.path().join("ipc/ipc.sock")).unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let init = read(&mut stream);
+        reply(&mut stream, &init, json!({"clientId":"follower"}));
+        let discovery = read(&mut stream);
+        reply(&mut stream, &discovery, json!({}));
+        let _follow = read(&mut stream);
+        let body = json!({"type":"broadcast","method":"thread-stream-state-changed","sourceClientId":"owner","version":11,
+            "params":{"conversationId":"large","change":{"type":"snapshot","revision":1,
+            "conversationState":{"id":"large","padding":"x".repeat(33*1024*1024)}}}}).to_string();
+        assert!(body.len()>32*1024*1024 && body.len()<256*1024*1024);
+        let _=stream.write_all(&(body.len() as u32).to_le_bytes()).and_then(|_|stream.write_all(body.as_bytes()));
+    });
+    let result=IpcClient::connect(root.path()).unwrap().snapshot("large",None);
+    server.join().unwrap();
+    let snapshot=result.expect("Valid official frame must not be rejected by our old 32 MiB cap");
+    assert_eq!(snapshot.state["padding"].as_str().unwrap().len(),33*1024*1024);
+}
+
+#[test]
+fn rejects_zero_and_over_official_frame_limit_without_allocating_body() {
+    for size in [0_u32,256*1024*1024+1] {
+        let root=tempfile::tempdir().unwrap();std::fs::create_dir(root.path().join("ipc")).unwrap();
+        let listener=UnixListener::bind(root.path().join("ipc/ipc.sock")).unwrap();
+        let server=std::thread::spawn(move || {
+            let (mut stream,_)=listener.accept().unwrap();let init=read(&mut stream);
+            reply(&mut stream,&init,json!({"clientId":"follower"}));let _=read(&mut stream);
+            stream.write_all(&size.to_le_bytes()).unwrap();
+        });
+        let error=IpcClient::connect(root.path()).unwrap().snapshot("invalid",None).err().unwrap();
+        server.join().unwrap();assert!(error.contains("响应长度无效"));assert!(error.contains(&size.to_string()));
+    }
+}

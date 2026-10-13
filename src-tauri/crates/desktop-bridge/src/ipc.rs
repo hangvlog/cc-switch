@@ -7,7 +7,10 @@ use std::{
 };
 use uuid::Uuid;
 
-const MAX_FRAME: usize = 32 * 1024 * 1024;
+const MAX_OUTGOING_FRAME: usize = 32 * 1024 * 1024;
+// Official desktop snapshots use the same 256 MiB envelope as its IPC router.
+// Visible mobile output remains separately bounded by history/owner_output.
+const MAX_INCOMING_FRAME: usize = 256 * 1024 * 1024;
 // The router waits up to 10 seconds for owner discovery before returning no-client-found.
 const TIMEOUT: Duration = Duration::from_secs(12);
 const NO_OWNER: &str = "Codex IPC: no-client-found";
@@ -117,7 +120,7 @@ impl IpcClient {
 
     fn send(&mut self, value: &Value) -> Result<(), String> {
         let body = serde_json::to_vec(value).map_err(|e| e.to_string())?;
-        if body.len() > MAX_FRAME {
+        if body.len() > MAX_OUTGOING_FRAME {
             return Err("IPC 消息超过上限".into());
         }
         self.stream
@@ -143,8 +146,8 @@ impl IpcClient {
                 _ => "Codex IPC 连接中断",
             })?;
         let size = u32::from_le_bytes(size) as usize;
-        if size == 0 || size > MAX_FRAME {
-            return Err("Codex IPC 帧长度不兼容".into());
+        if size == 0 || size > MAX_INCOMING_FRAME {
+            return Err(format!("Codex IPC 响应长度无效（{size} 字节，上限 {MAX_INCOMING_FRAME} 字节）"));
         }
         let mut body = vec![0; size];
         self.stream
