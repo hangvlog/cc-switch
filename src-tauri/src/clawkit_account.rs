@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod identity;
+mod system_user;
 pub(crate) mod transport;
 
 use transport::{http_client_builder, post_json_with_direct_fallback};
@@ -150,8 +151,7 @@ impl ClawkitAccountClient {
         } else {
             session.device_id.clone()
         };
-        let device_name = crate::services::sync_protocol::detect_system_device_name()
-            .unwrap_or_else(|| format!("电脑 {}", device_id.chars().rev().take(8).collect::<String>().chars().rev().collect::<String>()));
+        let device_name = system_user::display_name();
         let response = self
             .client
             .post(format!(
