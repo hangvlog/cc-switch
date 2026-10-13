@@ -48,7 +48,7 @@ function (scopeFactory, nj, open, close, clear, priority, pinned, recent, q, unr
     const rows = items => (items || []).map(project).filter(Boolean);
     return {version:1,open:true,activatedAt:state.activatedAt,mode:state.sidebarMode,
       priority:rows(s.get(priority,state.sidebarMode)),pinned:rows(s.get(pinned,state.sidebarMode)),
-      groups:s.get(recent,state.sidebarMode).map(group=>({dayStart:group.dayStart,rows:rows(group.items)})),
+      groups:s.get(recent,state.sidebarMode).map(group=>({dayStart:group.dayStart,label:group.relativeDay === 'today' ? '今天' : group.relativeDay === 'yesterday' ? '昨天' : new Date(group.dayStart).toLocaleDateString('zh-CN',{weekday:'long'}),rows:rows(group.items)})),
       unsupported,observedAt:Date.now()};
   };
   return true;
