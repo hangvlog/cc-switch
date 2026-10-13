@@ -11,12 +11,14 @@ pub(crate) fn test_routing(
     state.clients.insert(
         "phone".into(),
         Client {
+            pid: None,
             writer: Arc::new(Mutex::new(client)),
         },
     );
     state.clients.insert(
         "desktop".into(),
         Client {
+            pid: None,
             writer: Arc::new(Mutex::new(owner)),
         },
     );
@@ -59,4 +61,17 @@ pub(crate) fn test_routing(
     assert_eq!(changed["sourceClientId"], "desktop");
     assert_eq!(changed["version"], 3);
     assert!(state.pending.is_empty());
+}
+
+#[test]
+fn background_maintenance_preserves_an_existing_listener() {
+    use std::os::unix::{net::UnixListener,fs::MetadataExt};
+    let home=tempfile::tempdir().unwrap();
+    std::fs::create_dir(home.path().join("ipc")).unwrap();
+    let path=home.path().join("ipc/ipc.sock");
+    let listener=UnixListener::bind(&path).unwrap();
+    let inode=std::fs::metadata(&path).unwrap().ino();
+    crate::router_launch::maintain(home.path(),std::path::Path::new("/missing-executable")).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().ino(),inode);
+    assert!(listener.accept().is_ok());
 }

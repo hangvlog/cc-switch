@@ -41,6 +41,11 @@ mod unread;
 #[cfg(target_os="macos")]
 mod launch_cli;
 
+#[cfg(unix)]
+pub fn maintain_background_router(home: &Path, executable: &Path) -> Result<(), String> {
+    router_launch::maintain(home, executable)
+}
+
 pub fn maybe_run_router() {
     #[cfg(target_os="macos")]
     renderer::maybe_run();

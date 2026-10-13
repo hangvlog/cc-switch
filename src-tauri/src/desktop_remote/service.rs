@@ -228,6 +228,7 @@ fn daemon() -> Result<(), String> {
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
         return Ok(());
     }
+    let router_exe = std::env::current_exe().map_err(|_| "无法定位后台程序")?;
     let state = DesktopRemoteState::default();
     let persist = |running: bool| {
         let mut v = state
@@ -245,6 +246,13 @@ fn daemon() -> Result<(), String> {
     tauri::async_runtime::block_on(async {
         let mut retry = 0;
         while enabled() {
+            // Prepare only an absent/stale endpoint; never replace a live official router.
+            if retry % 10 == 0 {
+                let home = codex_home();
+                let exe = router_exe.clone();
+                let _ = tokio::task::spawn_blocking(move ||
+                    clawkit_desktop_bridge::maintain_background_router(&home, &exe)).await;
+            }
             if retry == 0 {
                 if state.start(None).is_err() {
                     super::phase(None, &state, "login-required");

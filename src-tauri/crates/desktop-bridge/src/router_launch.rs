@@ -12,7 +12,10 @@ pub fn maybe_run() {
         .nth(2)
         .map(PathBuf::from)
         .ok_or("Missing home".to_owned())
-        .and_then(|home| crate::router::run(&home));
+        .and_then(|home| {
+            let keeper = std::env::args().nth(3).and_then(|v| v.parse::<i32>().ok()).filter(|v| *v > 1);
+            crate::router::run(&home, keeper)
+        });
     std::process::exit(if result.is_ok() { 0 } else { 2 });
 }
 
@@ -74,4 +77,41 @@ pub fn ensure_before_launch(home: &Path, executable: &Path) -> Result<(), String
     let _ = child.kill();
     let _ = child.wait();
     Err("统一 IPC 路由启动超时".into())
+}
+
+/// Keep the same-user router ready before a future ordinary app launch. An
+/// existing official endpoint is always left alone, including startup races.
+pub fn maintain(home: &Path, executable: &Path) -> Result<(), String> {
+    let path = home.join("ipc/ipc.sock");
+    if UnixStream::connect(&path).is_ok() { return Ok(()); }
+    if path.exists() {
+        use std::os::unix::fs::FileTypeExt;
+        let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+        if !meta.file_type().is_socket() || meta.uid() != unsafe { libc::geteuid() } {
+            return Err("IPC path is not an owned socket".into());
+        }
+        // A bound socket may not be listening yet. Leave any process-owned
+        // endpoint alone, even if connect reports ECONNREFUSED during startup.
+        let owners = std::process::Command::new("/usr/sbin/lsof")
+            .args(["-a","-U","-Fp"]).arg(&path).output().map_err(|e|e.to_string())?;
+        if !owners.status.success() && owners.status.code()!=Some(1) {
+            return Err("Cannot inspect IPC listener".into());
+        }
+        if String::from_utf8_lossy(&owners.stdout).lines().any(|v|v.starts_with('p')) {
+            return Ok(());
+        }
+        // Do not remove a listener that has appeared since the first probe.
+        if UnixStream::connect(&path).is_ok() { return Ok(()); }
+        if !std::fs::symlink_metadata(&path).is_ok_and(|now|now.ino()==meta.ino()) {
+            return Ok(());
+        }
+        std::fs::rename(&path,path.with_file_name(format!("ipc.sock.before-clawkit-{}",uuid::Uuid::new_v4())))
+            .map_err(|e|e.to_string())?;
+    }
+    let mut child = std::process::Command::new(executable)
+        .arg("--clawkit-ipc-router").arg(home).arg(std::process::id().to_string())
+        .stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null()).spawn().map_err(|e|e.to_string())?;
+    std::thread::spawn(move || { let _ = child.wait(); });
+    Ok(())
 }

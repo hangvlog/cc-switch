@@ -8,13 +8,22 @@ use std::path::Path;
 pub(crate) fn running_pid(home: &Path) -> Option<i32> {
     use std::process::Command;
     let output = Command::new("/usr/sbin/lsof")
-        .args(["-a", "-U", "-Fp"])
-        .arg(home.join("ipc/ipc.sock"))
-        .output()
-        .ok()?;
-    let pids = String::from_utf8(output.stdout).ok()?;
-    // The prebound router outlives a window. It is not the official application.
-    pids.lines().filter_map(|line|line.strip_prefix('p')).filter_map(|pid|pid.parse::<i32>().ok()).find(|pid|{
+        .args(["-a", "-U", "-Fp"]).arg(home.join("ipc/ipc.sock")).output().ok()?;
+    let text = String::from_utf8(output.stdout).ok()?;
+    let mut pids: Vec<i32> = text.lines().filter_map(|s|s.strip_prefix('p')?.parse().ok()).collect();
+    // When our router owns the pathname, lsof lists only the router's end of
+    // connected sockets. Its peer PID list comes from LOCAL_PEERPID, never a
+    // client-supplied initialize field.
+    use std::os::unix::fs::MetadataExt;
+    if let Some(marker)=std::fs::read(home.join("ipc/clawkit-router.json")).ok()
+        .and_then(|v|serde_json::from_slice::<Value>(&v).ok()) {
+        if marker["pid"].as_i64().is_some_and(|pid|pids.contains(&(pid as i32)))
+            && std::fs::symlink_metadata(home.join("ipc/ipc.sock")).is_ok_and(|m|marker["inode"].as_u64()==Some(m.ino())) {
+            pids.extend(marker["peerPids"].as_array().into_iter().flatten()
+                .filter_map(|v|v.as_i64().and_then(|n|i32::try_from(n).ok())));
+        }
+    }
+    pids.into_iter().find(|pid|{
         Command::new("/bin/ps").args(["-p",&pid.to_string(),"-o","comm="]).output().ok()
             .and_then(|o|String::from_utf8(o.stdout).ok()).is_some_and(|s|{
                 s.trim().ends_with("/ChatGPT.app/Contents/MacOS/ChatGPT") || s.trim().ends_with("/Codex.app/Contents/MacOS/Codex")
@@ -66,6 +75,10 @@ fn running_build(_home: &Path) -> Option<String> {
 }
 
 pub fn can_send(home: &Path) -> bool {
+    #[cfg(target_os="macos")]
+    if home.join("ipc/clawkit-router.json").exists() && running_pid(home).is_none() {
+        return crate::native::event_ready(home);
+    }
     crate::native::event_ready(home) || crate::ipc::IpcClient::connect(home).is_ok()
 }
 

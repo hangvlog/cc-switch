@@ -10,6 +10,16 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
         });
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some("--maintain-router") {
+        let exe=std::env::current_exe().map_err(|e|e.to_string())?;
+        let stop=std::env::args().nth(2).ok_or("Missing stop file")?;
+        while !std::path::Path::new(&stop).exists() {
+            clawkit_desktop_bridge::maintain_background_router(&home,&exe)?;
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        return Ok(());
+    }
     let storage = std::env::var_os("CLAWKIT_PROBE_STORAGE")
         .map(PathBuf::from)
         .unwrap_or_else(|| {

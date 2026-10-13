@@ -20,6 +20,7 @@ const MAX_FRAME: usize = 256 * 1024 * 1024; // Match the official IPC frame limi
 pub(super) type Writer = Arc<Mutex<UnixStream>>;
 pub(super) struct Client {
     pub(super) writer: Writer,
+    pub(super) pid: Option<i32>,
 }
 pub(super) struct Pending {
     source: String,
@@ -225,6 +226,18 @@ fn disconnect(state: &mut State, id: &str, kind: &str) -> Vec<(Writer, Value)> {
     output
 }
 
+#[cfg(target_os="macos")]
+fn peer_pid(stream: &UnixStream) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut pid: i32 = 0;
+    let mut len = std::mem::size_of::<i32>() as libc::socklen_t;
+    let ok = unsafe { libc::getsockopt(stream.as_raw_fd(),0,libc::LOCAL_PEERPID,
+        &mut pid as *mut _ as *mut libc::c_void,&mut len) };
+    (ok == 0 && pid > 1).then_some(pid)
+}
+#[cfg(not(target_os="macos"))]
+fn peer_pid(_stream: &UnixStream) -> Option<i32> { None }
+
 fn serve(mut stream: UnixStream, state: Shared) -> Result<(), String> {
     stream.set_nonblocking(false).map_err(|e| e.to_string())?;
     stream
@@ -233,6 +246,7 @@ fn serve(mut stream: UnixStream, state: Shared) -> Result<(), String> {
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
         .map_err(|e| e.to_string())?;
+    let pid = peer_pid(&stream);
     let initial = read(&mut stream)?;
     if initial["type"] != "request" || initial["method"] != "initialize" {
         return Err("Initialize required".into());
@@ -250,7 +264,7 @@ fn serve(mut stream: UnixStream, state: Shared) -> Result<(), String> {
         if state.clients.len() >= 128 {
             return Err("Too many IPC clients".into());
         }
-        state.clients.insert(id.clone(), Client { writer });
+        state.clients.insert(id.clone(), Client { writer, pid });
         let mut output = route(&mut state, &id, initial);
         output.extend(route(&mut state, &id, status(&id, &kind, "connected")));
         output
@@ -275,7 +289,7 @@ fn serve(mut stream: UnixStream, state: Shared) -> Result<(), String> {
     Ok(())
 }
 
-pub fn run(home: &Path) -> Result<(), String> {
+pub fn run(home: &Path, keeper: Option<i32>) -> Result<(), String> {
     let directory = home.join("ipc");
     if !directory.exists() {
         std::fs::DirBuilder::new()
@@ -301,6 +315,7 @@ pub fn run(home: &Path) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ino();
     let mut last_connected = Instant::now();
+    let mut published_pids = Vec::<i32>::new();
     loop {
         while let Ok((stream, _)) = listener.accept() {
             if connections.load(Ordering::Relaxed) >= 128 {
@@ -341,7 +356,16 @@ pub fn run(home: &Path) -> Result<(), String> {
                 .collect()
         };
         deliver(output);
-        if last_connected.elapsed() > Duration::from_secs(30) {
+        let mut pids: Vec<i32> = state.lock().unwrap().clients.values().filter_map(|c|c.pid).collect();
+        pids.sort_unstable(); pids.dedup();
+        if pids != published_pids && std::fs::symlink_metadata(&path).is_ok_and(|m|m.ino()==inode) {
+            let tmp=marker.with_extension(format!("{}.tmp",std::process::id()));
+            let body=json!({"pid":std::process::id(),"inode":inode,"version":1,"peerPids":pids});
+            if std::fs::write(&tmp,body.to_string()).is_ok() { let _=std::fs::rename(tmp,&marker); }
+            published_pids=pids;
+        }
+        if last_connected.elapsed() > Duration::from_secs(30)
+            && !keeper.is_some_and(|pid| unsafe { libc::kill(pid,0) } == 0) {
             break;
         }
         std::thread::sleep(Duration::from_millis(100));
