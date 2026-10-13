@@ -2,6 +2,7 @@
 //! Native creation shares the original initialized engine; no independent engine fallback.
 mod attachments;
 mod catalog;
+mod conditional_read;
 mod clarification;
 mod creation;
 mod dispatch;
@@ -116,7 +117,7 @@ impl Bridge {
         match method {
             "initialize" => Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
+                "conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine",
                 "imageRead":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":false,"approvals":false}})),
             "desktop/image/read" => self.attachments.read(params),
             "desktop/image/chunk" => self.attachments.chunk(params),
@@ -144,13 +145,13 @@ impl Bridge {
                 }
                 catalog::list(&self.home, offset)
             }
-            "desktop/thread/history" => saved_history::read(
+            "desktop/thread/history" => Ok(conditional_read::response(saved_history::read(
                 &self.home,
                 self.thread(params)?,
                 params["cursor"].as_str(),
                 params["usersOnly"] == true,
                 &self.attachments,
-            ),
+            )?, params["ifVersion"].as_str())),
             "desktop/thread/read" | "desktop/thread/activate" => {
                 let thread = self.thread(params)?;
                 let snapshot = if method == "desktop/thread/activate" {
@@ -184,7 +185,7 @@ impl Bridge {
                         json!("上次发送结果未知，请在原桌面核对，不要重新发送");
                 }
                 visible["desktop"]["queue"] = json!(self.queue.list(thread)?);
-                Ok(json!({"thread":visible}))
+                Ok(conditional_read::response(json!({"thread":visible}), params["ifVersion"].as_str()))
             }
             "desktop/queue/add" => self.enqueue(params),
             "desktop/queue/cancel" => self.cancel_queue(params),
