@@ -74,9 +74,14 @@ impl DesktopRemoteState {
 
     fn start(&self, app: Option<AppHandle>) -> Result<(), String> {
         let mut state = self.0.lock().map_err(|_| "远程状态不可用")?;
-        if state.enabled {
+        if state.enabled && state.task.as_ref().is_some_and(|task| !task.inner().is_finished()) {
             return Ok(());
         }
+        if let Some(flag)=state.dispatch_enabled.take() {
+            flag.store(false,std::sync::atomic::Ordering::SeqCst);
+        }
+        state.enabled=false;
+        state.task.take();
         // Validate local storage before claiming remote is enabled.
         let queue_scope = ClawkitAccountClient::default().remote_queue_scope()?;
         let bridge = Bridge::open_with_queue_storage(
