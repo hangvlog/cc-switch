@@ -5,3 +5,5 @@ Windows read-state uses the installed official desktop IPC named pipe, with serv
 Engine completion/attention reminders retain at most 100 metadata records in the private engine runtime directory. Records survive engine restarts and are partitioned by a digest of the local authentication file; no credentials or message bodies are stored. Authentication changes conservatively start a new bucket, including changes while the engine is running. Storage failures do not stop the original engine.
 
 Verification: macOS 34 bridge tests and installed-engine synthetic E2E pass, including reminder recovery after engine restart. Windows IPC initialization and isolated-profile rejection pass with the installed official desktop. Packaging and release evidence is maintained by the parent chat-all repository.
+
+The remote connection card now distinguishes the native engine connection from idle-only IPC continuation. Native mode describes steering, queueing, and supported mobile approval/question responses; identity verification remains on the computer.

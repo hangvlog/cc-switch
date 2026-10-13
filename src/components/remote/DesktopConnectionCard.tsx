@@ -100,8 +100,10 @@ export function DesktopConnectionCard() {
             : "尚未检测到受支持的 Codex 桌面进程"}
           。
           {capabilities?.canSend
-            ? "支持空闲任务续聊。"
-            : "未验证的版本仅提供读取，发送保持关闭。"}
+            ? capabilities.nativeCreation
+              ? "支持任务续聊、运行中追加指令和下一轮排队。"
+              : "支持空闲任务续聊。"
+            : "电脑任务连接尚未就绪，当前仅提供读取。"}
         </p>
         <p className="text-xs text-muted-foreground">
           {capabilities?.nativeCreation
@@ -110,7 +112,10 @@ export function DesktopConnectionCard() {
         </p>
         <p className="text-xs text-muted-foreground">
           启用后会记住选择，应用启动时自动连接，切换页面不影响连接。电脑需保持开机、Codex
-          和 ClawKit 需运行。任务审批请在电脑处理。
+          和 ClawKit 需运行。
+          {capabilities?.nativeCreation
+            ? "支持的任务审批与澄清可在手机处理；身份验证仍需在电脑完成。"
+            : "通过上方入口重新打开 Codex 后，可在手机处理支持的任务审批与澄清。"}
         </p>
       </CardContent>
     </Card>
