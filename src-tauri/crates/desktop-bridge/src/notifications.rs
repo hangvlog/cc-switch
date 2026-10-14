@@ -124,13 +124,34 @@ impl Notifications {
         if events.len() > 100 {
             events.drain(..events.len() - 100);
         }
-        Ok(json!({"events":events,"observedAt":crate::now_ms()}))
+        let mut result=json!({"events":events,"observedAt":crate::now_ms()});
+        crate::notification_metadata::enrich(&home,&mut result)?;
+        Ok(result)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notification_includes_exact_title_and_project_without_catalog_paging() {
+        let root=tempfile::tempdir().unwrap();let home=root.path();
+        std::fs::create_dir(home.join("sessions")).unwrap();
+        let path=home.join("sessions/notice.jsonl");
+        std::fs::write(&path,format!("{}\n{}\n",json!({"type":"session_meta","payload":{"id":"target"}}),
+            json!({"timestamp":"2026-10-14T01:19:00Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"PRIVATE_BODY"}}))).unwrap();
+        let db=rusqlite::Connection::open(home.join("state_5.sqlite")).unwrap();
+        db.execute_batch("CREATE TABLE threads(id TEXT,title TEXT,name TEXT,cwd TEXT,project_id TEXT,rollout_path TEXT,archived INTEGER,source TEXT,updated_at INTEGER,recency_at INTEGER);
+            CREATE TABLE projects(id TEXT,name TEXT,position INTEGER);CREATE TABLE project_roots(project_id TEXT,path TEXT,position INTEGER);
+            INSERT INTO projects VALUES('project','项目大杂烩',0);").unwrap();
+        db.execute("INSERT INTO threads VALUES('target','Original prompt','通知标题修复','/repo',NULL,?1,0,'vscode',999,0)",[path.to_str().unwrap()]).unwrap();
+        for i in 0..110 {db.execute("INSERT INTO threads VALUES(?1,'OTHER','Other','/repo',NULL,'/missing',0,'vscode',1,99)",[format!("other-{i}")]).unwrap();}
+        std::fs::write(home.join(".codex-global-state.json"),json!({"thread-project-assignments":{"target":{"projectKind":"local","projectId":"project"}}}).to_string()).unwrap();
+        let result=Notifications::default().read(home).unwrap();
+        assert_eq!(result["events"][0]["threadTitle"],"通知标题修复");
+        assert_eq!(result["events"][0]["projectName"],"项目大杂烩");
+        assert!(!result.to_string().contains("PRIVATE_BODY"));assert!(result.to_string().len()<1024);
+    }
     #[test]
     fn reminders_are_metadata_only_stable_and_ignore_internal_or_partial_output() {
         let root = tempfile::tempdir().unwrap();

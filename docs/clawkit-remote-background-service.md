@@ -33,3 +33,5 @@ Rollback: disable the service, restore 3.19.55, then enable its in-process remot
 ## 3.19.61：手机执行记录不传完整脚本
 
 普通命令记录仅投影状态、工作目录、输出、退出码和耗时，标题使用“执行命令”；MCP/动态工具执行记录移除输入 arguments。快照、历史、item 和 turn 事件共用输出投影。原生订阅响应去除已复制到 thread.turns 的 initialTurnsPage，避免未经精简的重复内容。待审批请求保留准确指令和权限信息。精简发生在本机向中继发送前，不改变官方本地 IPC 的状态快照。
+
+3.19.62 的通知事件直接附带 threadTitle/projectName：按事件 threadId 查询本地索引并复用官方项目归属，不加载会话历史、不分页读取侧栏，也不向执行 owner 请求状态。普通启动与增强引擎提醒共用元数据补齐。

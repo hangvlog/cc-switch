@@ -18,6 +18,7 @@ mod ipc_tests;
 mod ledger;
 mod models;
 mod notifications;
+mod notification_metadata;
 #[cfg(unix)]
 mod router;
 #[cfg(unix)]
@@ -207,7 +208,8 @@ impl Bridge {
                 models::select(&self.home, thread, model)
             }
             "desktop/notifications/list" => if native::event_ready(&self.home) {
-                native::request(&self.home,"clawkit/notifications/read",json!({}))
+                { let mut result=native::request(&self.home,"clawkit/notifications/read",json!({}))?;
+                    notification_metadata::enrich(&self.home,&mut result)?; Ok(result) }
             } else {self.notifications.lock().map_err(|_| "提醒状态不可用")?.read(&self.home)},
             "desktop/status" => Ok(version::status(&self.home)),
             "desktop/thread/statuses" => thread_status::read(&self.home, params),
