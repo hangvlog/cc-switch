@@ -124,6 +124,7 @@ impl DesktopRemoteState {
             let mut delay = 1;
             loop {
                 let account = ClawkitAccountClient::default();
+                let _ = account.ensure_session().await;
                 if account.remote_queue_scope().ok().as_deref() != Some(relay_scope.as_str()) {
                     phase(app.as_ref(), &runtime, "login-required");
                     break;
@@ -162,6 +163,7 @@ async fn relay(
     expected_scope: &str,
 ) -> Result<(), ()> {
     let parsed = url::Url::parse(url).map_err(|_| ())?;
+    let connected_token = account.active_credentials().map_err(|_| ())?.0;
     if parsed.scheme() != "wss" {
         return Err(());
     }
@@ -195,7 +197,9 @@ async fn relay(
             }
             _ = heartbeat.tick() => {
                 if last_received.elapsed()>Duration::from_secs(60) {return Err(());}
-                if account.active_credentials().is_err() { return Ok(()); }
+                // Reconnect with a fresh ticket before the old WebSocket auth deadline.
+                if account.ensure_session().await == Ok(true) { return Ok(()); }
+                if account.active_credentials().map(|s|s.0).ok().as_deref() != Some(connected_token.as_str()) { return Ok(()); }
                 socket.send(Message::Ping(Vec::new().into())).await.map_err(|_| ())?;
             }
             message = socket.next() => {

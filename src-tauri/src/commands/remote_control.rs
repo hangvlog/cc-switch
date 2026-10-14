@@ -281,8 +281,10 @@ pub fn stop_codex_remote_server(
 }
 
 #[tauri::command]
-pub fn get_clawkit_account_status() -> Value {
-    crate::clawkit_account::ClawkitAccountClient::default().status()
+pub async fn get_clawkit_account_status() -> Value {
+    let account = crate::clawkit_account::ClawkitAccountClient::default();
+    let _ = account.ensure_session().await;
+    account.status()
 }
 
 #[tauri::command]
@@ -297,10 +299,11 @@ pub async fn login_clawkit_account(
 }
 
 #[tauri::command]
-pub fn logout_clawkit_account(app: AppHandle) -> Result<Value, String> {
-    crate::desktop_remote::sign_out(&app)?;
+pub async fn logout_clawkit_account(app: AppHandle) -> Result<Value, String> {
     use tauri_plugin_opener::OpenerExt;
     let account=crate::clawkit_account::ClawkitAccountClient::default();
+    account.revoke_session().await?;
+    crate::desktop_remote::sign_out(&app)?;
     let status=account.logout()?;
     app.opener().open_url(account.sso_logout_url(),None::<String>).map_err(|_| "已退出本机，但无法打开统一退出页面".to_string())?;
     Ok(status)

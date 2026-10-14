@@ -254,6 +254,7 @@ fn daemon() -> Result<(), String> {
                     clawkit_desktop_bridge::maintain_background_router(&home, &exe)).await;
             }
             if retry == 0 {
+                let _ = ClawkitAccountClient::default().ensure_session().await;
                 if state.start(None).is_err() {
                     super::phase(None, &state, "login-required");
                 }

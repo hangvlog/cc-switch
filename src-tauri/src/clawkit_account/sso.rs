@@ -27,7 +27,9 @@ impl ClawkitAccountClient {
                 let id=data["user"]["id"].as_u64().ok_or("统一账号 ID 缺失")?;
                 if data["user"]["sub"].as_str()!=Some(id.to_string().as_str()){return Err("统一账号身份不一致".into());}
                 let session=StoredSession{token:token.into(),user:data["user"].clone(),device_id,
-                    expires_at:unix_timestamp()+data["expires_in"].as_u64().unwrap_or(86400)};
+                    expires_at:unix_timestamp()+data["expires_in"].as_u64().unwrap_or(86400),
+                    refresh_token:data["refresh_token"].as_str().map(str::to_owned),
+                    refresh_expires_at:data["refresh_expires_at"].as_f64().map(|v|v as u64)};
                 self.save_session(&session)?;
                 return Ok(session_status(&session));
             }

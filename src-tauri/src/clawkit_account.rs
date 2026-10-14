@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 mod identity;
 mod sso;
+mod renewal;
 mod system_user;
 pub(crate) mod transport;
 
@@ -25,6 +26,10 @@ struct StoredSession {
     user: Value,
     device_id: String,
     expires_at: u64,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    refresh_expires_at: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -77,9 +82,9 @@ impl ClawkitAccountClient {
     }
 
     pub fn status(&self) -> Value {
-        match self.load_active_session() {
-            Ok(session) => session_status(&session),
-            Err(_) => json!({ "status": "ok", "authenticated": false }),
+        match self.load_session() {
+            Ok(session) if session.expires_at > unix_timestamp() || session.can_refresh() => session_status(&session),
+            _ => json!({ "status": "ok", "authenticated": false }),
         }
     }
 
@@ -102,6 +107,7 @@ impl ClawkitAccountClient {
     }
 
     async fn socket_ticket(&self, owner: bool) -> Result<Value, String> {
+        self.ensure_session().await?;
         let session = self.load_active_session()?;
         // The optional Codex++ helper has its own independent app-server relay.
         // A distinct stable device ID prevents it replacing the original-owner socket.
@@ -178,7 +184,7 @@ impl ClawkitAccountClient {
     fn load_active_session(&self) -> Result<StoredSession, String> {
         let session = self.load_session()?;
         if session.expires_at <= unix_timestamp() {
-            let _ = self.logout();
+            // Preserve the refresh credential through sleep/offline periods.
             return Err("登录已过期，请重新登录".to_string());
         }
         Ok(session)
@@ -377,6 +383,8 @@ mod tests {
             user: json!({ "username": "alice" }),
             device_id: "desktop-device".into(),
             expires_at: 42,
+            refresh_token: None,
+            refresh_expires_at: None,
         });
 
         assert_eq!(status["deviceId"], "desktop-device");
