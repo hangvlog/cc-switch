@@ -4,14 +4,7 @@ use serde_json::{json, Value};
 
 impl Bridge {
     pub(crate) fn project_events(&self,batch:&mut Value) {
-        for entry in batch["events"].as_array_mut().into_iter().flatten() {
-            let message=&mut entry["message"];
-            if matches!(message["method"].as_str(),Some("item/started"|"item/completed")) {
-                let item=&mut message["params"]["item"];
-                super::output::project(&self.attachments,item);
-                if item["type"]=="userMessage" {item["content"]=json!(self.attachments.project_content(&item["content"]));}
-            }
-        }
+        super::output::project_batch(&self.attachments,batch);
     }
 
     pub(crate) fn native_subscribe(&self, thread: &str) -> Result<Value,String> {
@@ -27,16 +20,14 @@ impl Bridge {
         self.native_reconcile(thread,&result["thread"])?;
         result["queue"]=json!(self.queue.list(thread)?);
         self.project_native_items(&mut result["thread"]);
+        // The page was copied into thread.turns above. Do not send a second,
+        // unprojected copy of tool scripts in the engine response envelope.
+        result.as_object_mut().unwrap().remove("initialTurnsPage");
         Ok(result)
     }
 
     fn project_native_items(&self, thread:&mut Value) {
-        if let Some(turns)=thread["turns"].as_array_mut() {
-            for item in turns.iter_mut().flat_map(|t|t["items"].as_array_mut().into_iter().flatten()) {
-                super::output::project(&self.attachments,item);
-                if item["type"]=="userMessage" {item["content"]=json!(self.attachments.project_content(&item["content"]));}
-            }
-        }
+        super::output::project_items(&self.attachments,thread);
     }
 
     pub(crate) fn native_history(&self,thread:&str,cursor:&str)->Result<Value,String> {

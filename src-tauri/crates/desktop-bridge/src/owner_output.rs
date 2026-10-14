@@ -24,10 +24,10 @@ pub fn project(item: &Value, store: &Attachments, budget: &mut usize) -> Option<
     if *budget == 0 { return None; }
     let kind = item["type"].as_str()?;
     let fields: &[&str] = match kind {
-        "commandExecution" => &["command", "cwd", "aggregatedOutput", "exitCode", "durationMs"],
+        "commandExecution" => &["cwd", "aggregatedOutput", "exitCode", "durationMs"],
         "fileChange" => &["changes"],
-        "mcpToolCall" => &["server", "tool", "arguments", "result", "error", "durationMs"],
-        "dynamicToolCall" => &["tool", "arguments", "contentItems", "success", "error"],
+        "mcpToolCall" => &["server", "tool", "result", "error", "durationMs"],
+        "dynamicToolCall" => &["tool", "contentItems", "success", "error"],
         "webSearch" => &["query", "action"],
         "imageGeneration" => &["result"],
         "imageView" => &["path"],

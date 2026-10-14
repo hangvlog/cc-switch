@@ -37,14 +37,7 @@ pub fn read_events(home: &Path, params: Value) -> Result<Value, String> {
 
 pub fn project_event_outputs(batch:&mut Value,storage:&Path)->Result<(),String> {
     let attachments=crate::attachments::Attachments::open(storage)?;
-    for entry in batch["events"].as_array_mut().into_iter().flatten() {
-        let message=&mut entry["message"];
-        if matches!(message["method"].as_str(),Some("item/started"|"item/completed")) {
-            let item=&mut message["params"]["item"];
-            output::project(&attachments,item);
-            if item["type"]=="userMessage" {item["content"]=json!(attachments.project_content(&item["content"]));}
-        }
-    }
+    output::project_batch(&attachments,batch);
     Ok(())
 }
 
