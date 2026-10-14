@@ -37,33 +37,23 @@ fn parts(store:&Attachments,items:&Value)->Vec<Value> {
     }).collect()
 }
 pub(crate) fn project(store:&Attachments,item:&mut Value) {
-    let kind=item["type"].as_str().unwrap_or("").to_owned();
-    if kind=="commandExecution" {
-        // Execution records are status/result cards on mobile. Pending approval
-        // requests use a separate path and retain the exact command for consent.
-        if let Some(fields)=item.as_object_mut() {
-            fields.retain(|key,_|matches!(key.as_str(),"id"|"type"|"status"|"cwd"|"aggregatedOutput"|"exitCode"|"durationMs"|"truncated"));
-            fields.insert("command".into(),json!("执行命令"));
-        }
-        return;
-    }
-    if matches!(kind.as_str(),"mcpToolCall"|"dynamicToolCall") {
-        if let Some(fields)=item.as_object_mut() {fields.remove("arguments");}
-    }
-    let content=match kind.as_str() {
+    let kind=item["type"].as_str().unwrap_or("");
+    if !matches!(kind,"commandExecution"|"fileChange"|"mcpToolCall"|"dynamicToolCall"|"webSearch"|"imageGeneration"|"imageView"|"plan"|"toolActivity") {return;}
+    // Keep materialized image attachments, but never execution text, tool names,
+    // arguments, structured results, diffs or search details on the mobile wire.
+    let content = if let Some(parts)=item["outputContent"].as_array() {
+        parts.iter().filter(|p|p["type"]=="image").cloned().collect::<Vec<_>>()
+    } else {match kind {
         "mcpToolCall"=>parts(store,&item["result"]["content"]),
         "dynamicToolCall"=>parts(store,&item["contentItems"]),
         "imageGeneration"=>vec![image(store,item["result"].as_str().unwrap_or(""),true)],
         "imageView"=>vec![local_image(store,item["path"].as_str().unwrap_or(""))],
-        _=>return,
-    };
-    item["outputContent"]=json!(content);
-    // Images are chunk-read from immutable account storage, never repeated in snapshots.
-    if kind=="mcpToolCall" {
-        if let Some(result)=item["result"].as_object_mut() {result.remove("content");result.remove("_meta");}
-    }
-    if kind=="dynamicToolCall" {item.as_object_mut().unwrap().remove("contentItems");}
-    if kind=="imageGeneration" {item.as_object_mut().unwrap().remove("result");}
+        _=>vec![],
+    }.into_iter().filter(|p|p["type"]=="image").collect()};
+    let status=item["status"].clone();let id=item["id"].clone();
+    *item=json!({"id":id,"type":"toolActivity","status":status});
+    if !content.is_empty() {item["outputContent"]=json!(content);}
+
 }
 
 pub(crate) fn project_items(store:&Attachments,thread:&mut Value) {
@@ -89,6 +79,14 @@ pub(crate) fn project_batch(store:&Attachments,batch:&mut Value) {
                     if item["type"]=="userMessage" {item["content"]=json!(store.project_content(&item["content"]));}
                 }
             },
+            Some("item/commandExecution/outputDelta"|"item/fileChange/outputDelta"|"item/mcpToolCall/progress"|"item/dynamicToolCall/progress"|"item/plan/delta"|"turn/diff/updated")=>{
+                // Retain the event sequence/cursor without retransmitting raw output.
+                let params=&message["params"];
+                let item_id=params["itemId"].as_str().map(str::to_owned)
+                    .unwrap_or_else(||format!("tool-{}",params["turnId"].as_str().unwrap_or("")));
+                let summary=json!({"threadId":params["threadId"],"turnId":params["turnId"],"itemId":item_id});
+                message["method"]=json!("desktop/tool/progress");message["params"]=summary;
+            },
             _=>{},
         }
     }
@@ -104,26 +102,30 @@ pub(crate) fn project_batch(store:&Attachments,batch:&mut Value) {
         let before=command.to_string().len();
         project(&store,&mut command);
         assert!(!command.to_string().contains("PRIVATE_SCRIPT"));
-        assert_eq!(command["aggregatedOutput"],"RESULT_OK");assert_eq!(command["exitCode"],0);
+        assert!(command.get("aggregatedOutput").is_none());assert!(command.get("exitCode").is_none());
+        assert_eq!(command["type"],"toolActivity");
         assert_eq!(command["status"],"completed");assert!(command.to_string().len()<256);
         println!("COMMAND_PAYLOAD_BYTES: {before} -> {}",command.to_string().len());
         let mut tool=json!({"id":"t","type":"dynamicToolCall","tool":"exec_command",
             "arguments":{"cmd":"PRIVATE_SCRIPT"},"contentItems":[{"type":"text","text":"RESULT_OK"}]});
         project(&store,&mut tool);assert!(tool.get("arguments").is_none());
-        assert_eq!(tool["outputContent"][0]["text"],"RESULT_OK");
+        assert!(tool.get("outputContent").is_none());assert!(tool.get("tool").is_none());
         let raw=json!({"id":"c","type":"commandExecution","command":"PRIVATE_SCRIPT","status":"inProgress"});
         let approval=json!({"id":9,"method":"item/commandExecution/requestApproval","params":{"command":"EXACT_APPROVAL","threadId":"t"}});
         let mut batch=json!({"pendingRequests":[approval.clone()],"events":[
             {"message":{"method":"item/started","params":{"item":raw.clone()}}},
             {"message":{"method":"turn/completed","params":{"turn":{"id":"u","items":[raw.clone()]}}}},
-            {"message":approval.clone()}]});
+            {"message":approval.clone()},
+            {"seq":4,"message":{"method":"item/commandExecution/outputDelta","params":{"threadId":"t","turnId":"u","itemId":"c","delta":"PRIVATE_SCRIPT"}}},
+            {"seq":5,"message":{"method":"turn/diff/updated","params":{"threadId":"t","turnId":"u","diff":"PRIVATE_SCRIPT"}}}]});
         project_batch(&store,&mut batch);
         assert!(!batch.to_string().contains("PRIVATE_SCRIPT"));
+        assert_eq!(batch["events"][3]["seq"],4);assert_eq!(batch["events"][3]["message"]["method"],"desktop/tool/progress");
         assert_eq!(batch["pendingRequests"][0],approval);assert_eq!(batch["events"][2]["message"],approval);
         let mut thread=json!({"turns":[{"items":[raw]}]});
         project_items(&store,&mut thread);assert!(!thread.to_string().contains("PRIVATE_SCRIPT"));
         let projected=crate::owner_output::project(&json!({"id":"c","type":"commandExecution","command":"PRIVATE_SCRIPT","exitCode":0}),&store,&mut 1000).unwrap();
-        assert!(!projected.to_string().contains("PRIVATE_SCRIPT"));assert_eq!(projected["exitCode"],0);
+        assert!(!projected.to_string().contains("PRIVATE_SCRIPT"));assert!(projected.get("exitCode").is_none());
     }
     #[test] fn image_outputs_use_private_content_ids_without_remote_paths() {
         let root=tempfile::tempdir().unwrap();let store=Attachments::open(root.path()).unwrap();
@@ -135,7 +137,7 @@ pub(crate) fn project_batch(store:&Attachments,batch:&mut Value) {
         assert!(item["result"].get("content").is_none());
         let read=store.read(&json!({"imageId":id,"offset":0})).unwrap();
         assert_eq!(read["data"],STANDARD.encode(bytes));
-        assert_eq!(item["outputContent"][1]["text"],"screen");
+        assert_eq!(item["outputContent"].as_array().unwrap().len(),1);
         let mut external=json!({"type":"dynamicToolCall","contentItems":[{"type":"inputImage","imageUrl":"https://private.invalid/screenshot"}]});
         project(&store,&mut external);assert_eq!(external["outputContent"][0]["unavailable"],true);
     }

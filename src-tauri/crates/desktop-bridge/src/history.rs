@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_owner_keeps_command_result_and_completion_status() {
+    fn ordinary_owner_keeps_tool_activity_without_execution_details() {
         let state = json!({"id":"t","resumeState":"resumed","requests":[],"threadRuntimeStatus":{"type":"idle"},
             "turns":[{"turnId":"turn","status":"completed","items":[
                 {"type":"commandExecution","id":"approval8","command":"printf OWNER_APPROVAL_OK",
@@ -260,7 +260,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let attachments = crate::attachments::Attachments::open(root.path()).unwrap();
         let result = visible_thread(&state,"owner",1,&attachments);
-        assert_eq!(result["turns"][0]["items"][0]["aggregatedOutput"],"OWNER_APPROVAL_OK");
+        assert!(result["turns"][0]["items"][0].get("aggregatedOutput").is_none());
+        assert_eq!(result["turns"][0]["items"][0]["type"],"toolActivity");
         assert_eq!(result["turns"][0]["items"][0]["status"],"completed");
         assert!(result["turns"][0]["items"][0].get("privateMetadata").is_none());
     }

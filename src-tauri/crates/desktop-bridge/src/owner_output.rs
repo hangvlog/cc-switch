@@ -24,11 +24,9 @@ pub fn project(item: &Value, store: &Attachments, budget: &mut usize) -> Option<
     if *budget == 0 { return None; }
     let kind = item["type"].as_str()?;
     let fields: &[&str] = match kind {
-        "commandExecution" => &["cwd", "aggregatedOutput", "exitCode", "durationMs"],
-        "fileChange" => &["changes"],
-        "mcpToolCall" => &["server", "tool", "result", "error", "durationMs"],
-        "dynamicToolCall" => &["tool", "contentItems", "success", "error"],
-        "webSearch" => &["query", "action"],
+        "commandExecution" | "fileChange" | "webSearch" => &[],
+        "mcpToolCall" => &["result"],
+        "dynamicToolCall" => &["contentItems"],
         "imageGeneration" => &["result"],
         "imageView" => &["path"],
         _ => return None,
@@ -46,7 +44,7 @@ pub fn project(item: &Value, store: &Attachments, budget: &mut usize) -> Option<
     let before = *budget;
     let mut output = bounded(&value, budget, 0);
     // Keep routing identity intact even when the display budget is exhausted.
-    output["id"] = json!(id); output["type"] = json!(kind);
+    output["id"] = json!(id); output["type"] = value["type"].clone();
     if let Some(status) = item.get("status") { output["status"] = status.clone(); }
     if *budget == 0 && before > 0 { output["truncated"] = json!(true); }
     Some(output)
@@ -64,14 +62,14 @@ mod tests {
                 "structuredContent":{"saved":true},"_meta":{"hidden":true}}});
         let result = project(&item,&store,&mut 10000).unwrap();
         assert!(crate::attachments::valid_id(result["outputContent"][0]["imageId"].as_str().unwrap()));
-        assert_eq!(result["result"]["structuredContent"]["saved"],true);
+        assert!(result.get("result").is_none());assert!(result.get("tool").is_none());
         assert!(result["result"].get("_meta").is_none());
         assert!(result.get("private").is_none());
         let command = json!({"id":"cmd","type":"commandExecution","status":"completed","aggregatedOutput":"字".repeat(500)});
         let mut budget = 80; let limited = project(&command,&store,&mut budget).unwrap();
-        assert_eq!(budget,0); assert_eq!(limited["truncated"],true);
+        assert!(budget>0); assert!(limited.get("truncated").is_none());
         assert_eq!(limited["status"],"completed");
-        assert!(limited["aggregatedOutput"].as_str().unwrap().chars().count()<80);
+        assert!(limited.get("aggregatedOutput").is_none());assert_eq!(limited["type"],"toolActivity");
         assert!(project(&json!({"id":"r","type":"reasoning","rawContent":"hidden"}),&store,&mut 100).is_none());
     }
 }
