@@ -258,6 +258,12 @@ pub async fn set_desktop_remote_enabled(
     app: AppHandle,
     state: State<'_, DesktopRemoteState>,
 ) -> Result<Value, String> {
+    if enabled {
+        let account = ClawkitAccountClient::default();
+        account.ensure_session().await.or_else(|error| {
+            account.active_credentials().map(|_| false).map_err(|_| error)
+        })?;
+    }
     #[cfg(target_os = "macos")]
     {
         state.stop()?;
@@ -299,7 +305,11 @@ pub fn restore(app: &AppHandle) {
     }
     #[cfg(not(target_os = "macos"))]
     if std::fs::read_to_string(preference()).ok().as_deref() == Some("true") {
-        let _ = app.state::<DesktopRemoteState>().start(Some(app.clone()));
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            let _ = ClawkitAccountClient::default().ensure_session().await;
+            let _ = app.state::<DesktopRemoteState>().start(Some(app.clone()));
+        });
     }
 }
 

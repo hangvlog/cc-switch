@@ -177,7 +177,10 @@ fn start() -> Result<(), String> {
 pub(super) fn set_enabled(value: bool) -> Result<Value, String> {
     private_dir(&storage())?;
     if value {
-        ClawkitAccountClient::default().active_credentials()?;
+        let account = ClawkitAccountClient::default();
+        tauri::async_runtime::block_on(account.ensure_session()).or_else(|error| {
+            account.active_credentials().map(|_| false).map_err(|_| error)
+        })?;
     }
     write_private(&preference(), if value { b"true" } else { b"false" })?;
     if value {
