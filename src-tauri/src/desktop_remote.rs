@@ -4,7 +4,7 @@ use crate::clawkit_account::ClawkitAccountClient;
 mod events;
 #[cfg(target_os = "macos")]
 mod service;
-use clawkit_desktop_bridge::Bridge;
+use clawkit_desktop_bridge::{Bridge, CatalogReader};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::{
@@ -179,6 +179,11 @@ async fn relay(
     .map_err(|_| ())?;
     phase(app, state, "waiting");
     let (responses, mut outbound) = tokio::sync::mpsc::channel::<Value>(64);
+    let catalog_reader = bridge.lock().map_err(|_| ())?.catalog_reader();
+    // Separate bounded lanes: slow status scans cannot occupy directory slots.
+    // Stateful commands retain the original bridge mutex and receipt ordering.
+    let catalog_slots = Arc::new(tokio::sync::Semaphore::new(2));
+    let status_slots = Arc::new(tokio::sync::Semaphore::new(2));
     let event_task = tauri::async_runtime::spawn(events::pump(bridge.lock().expect("bridge").owner_streams(), codex_home(), storage().join("accounts").join(expected_scope), responses.clone()));
     struct Abort(tauri::async_runtime::JoinHandle<()>);
     impl Drop for Abort { fn drop(&mut self) { self.0.abort(); } }
@@ -217,6 +222,19 @@ async fn relay(
                         let responses = responses.clone();
                         // Bounded dispatch queue; a slow RPC cannot stop heartbeats or events.
                         let permit = responses.try_reserve_owned().map_err(|_| ())?;
+                        if CatalogReader::accepts(&request) {
+                            let reader = catalog_reader.clone();
+                            let slots = if request["method"] == "desktop/thread/list" { catalog_slots.clone() } else { status_slots.clone() };
+                            tauri::async_runtime::spawn(async move {
+                                if let Ok(slot) = slots.acquire_owned().await {
+                                    let _ = tauri::async_runtime::spawn_blocking(move || {
+                                        let _slot = slot;
+                                        if let Some(response) = reader.handle(request) { permit.send(response); }
+                                    }).await;
+                                }
+                            });
+                            continue;
+                        }
                         tauri::async_runtime::spawn_blocking(move || {
                             if let Some(response) = bridge.lock().ok().and_then(|bridge|bridge.handle(request)) {
                                 permit.send(response);

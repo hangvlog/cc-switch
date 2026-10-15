@@ -4,6 +4,8 @@ mod attachments;
 mod activity;
 mod activity_automations;
 mod catalog;
+mod catalog_reader;
+pub use catalog_reader::CatalogReader;
 mod conditional_read;
 mod clarification;
 mod creation;
@@ -115,6 +117,10 @@ impl Bridge {
 
     pub fn owner_streams(&self) -> owner_stream::OwnerStreams { self.owner_streams.clone() }
 
+    pub fn catalog_reader(&self) -> CatalogReader {
+        CatalogReader::new(&self.home, self.enabled.clone())
+    }
+
     pub fn enable_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
         self.enabled.clone()
     }
@@ -220,17 +226,7 @@ impl Bridge {
             },
             "desktop/thread/markRead" => unread::mark_read(&self.home,self.thread(params)?),
             "desktop/thread/search" => self.search.query(&self.home, params["query"].as_str().ok_or("请输入搜索词")?),
-            "desktop/thread/list" => {
-                let offset = params["cursor"]
-                    .as_str()
-                    .unwrap_or("0")
-                    .parse::<usize>()
-                    .map_err(|_| "分页游标无效")?;
-                if offset > 100_000 {
-                    return Err("分页游标超出范围".into());
-                }
-                catalog::page(&self.home, offset, params["limit"].as_u64().unwrap_or(50).min(50) as usize, params["lightweight"] == true)
-            }
+            "desktop/thread/list" => catalog_reader::list(&self.home, params),
             "desktop/thread/history" => {
                 let thread=self.thread(params)?;
                 if let Some(cursor)=params["cursor"].as_str().and_then(|v|v.strip_prefix("engine:")) {
