@@ -1,4 +1,4 @@
-//! Resolve only the notification's display fields; never load transcript or runtime state.
+//! Enrich bounded reminder metadata and reconcile resolution with the official owner.
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -27,7 +27,8 @@ pub(crate) fn enrich(home: &Path, result: &mut Value) -> Result<(), String> {
             "name":r.get::<_,Option<String>>(3)?,"projectId":r.get::<_,Option<String>>(4)?}))) { rows.push(row); }
     }
     crate::sidebar::assign_projects(home,&mut rows,&projects);
-    for event in events {
+    crate::unread::annotate(home,&mut rows);
+    for event in events.iter_mut() {
         let Some(row) = rows.iter().find(|r| r["id"] == event["threadId"]) else { continue };
         let mut title = clean(&row["name"]);
         if title.is_empty() { title = clean(&row["title"]); }
@@ -38,6 +39,35 @@ pub(crate) fn enrich(home: &Path, result: &mut Value) -> Result<(), String> {
         if project.is_empty() { project = "未归属项目".into(); }
         event["threadTitle"] = json!(title);
         event["projectName"] = json!(project);
+        if event["timestampMs"].is_null() {
+            if let Some(timestamp)=event["timestamp"].as_str() {
+                if let Ok(ms)=db.query_row("SELECT CAST((julianday(?1)-2440587.5)*86400000 AS INTEGER)",[timestamp],|r|r.get::<_,u64>(0)) {
+                    event["timestampMs"]=json!(ms);
+                }
+            }
+        }
+        if event["kind"]=="completed" && row["hasUnreadTurn"]==false {
+            // Give the desktop time to publish its unread transition after completion.
+            if event["timestampMs"].as_u64().is_some_and(|t|crate::now_ms().saturating_sub(t)>10_000) {
+                event["resolved"]=json!(true);
+            }
+        }
     }
+    let threads:Vec<String> = events.iter().filter(|e|e["kind"]=="attention" && e["resolved"]!=true && e["pending"]!=true)
+        .filter_map(|e|e["threadId"].as_str()).map(str::to_owned)
+        .collect::<std::collections::HashSet<_>>().into_iter().collect();
+    // One bounded passive batch; never opens a chat or waits once per notification.
+    let _=crate::ipc::IpcClient::passive_batch(home,&threads.iter().map(String::as_str).collect::<Vec<_>>(),|thread,state| {
+        if state["resumeState"]!="resumed" || !state["requests"].is_array() { return; }
+        let questions=crate::clarification::pending(state);
+        let requests=state["requests"].as_array();
+        for event in events.iter_mut().filter(|e|e["threadId"]==thread && e["kind"]=="attention" && e["resolved"]!=true && e["pending"]!=true) {
+            let pending=if let Some(id)=event["requestId"].as_str() {
+                questions.iter().any(|q|q["requestId"]==id || q["requestId"]==format!("async:{id}"))
+                    || requests.into_iter().flatten().any(|q|q["id"]==id)
+            } else { !questions.is_empty() || requests.is_some_and(|r|!r.is_empty()) };
+            if !pending && event["timestampMs"].as_u64().is_some_and(|t|crate::now_ms().saturating_sub(t)>10_000) { event["resolved"]=json!(true); }
+        }
+    });
     Ok(())
 }

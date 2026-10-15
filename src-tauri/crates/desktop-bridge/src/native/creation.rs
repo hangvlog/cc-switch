@@ -62,7 +62,7 @@ impl NativeCreations {
             return Err("远程连接已关闭，尚未发送".into());
         }
         if !super::ready(home) {
-            return Err("请先从 ClawKit 打开 Codex，启用无需辅助功能的新建通道".into());
+            return Err("当前 Codex 尚未接入新建通道；启用手机远控后，下次正常启动 Codex 即可接入，无需中断当前任务".into());
         }
         let p = super::request(home, "project/read", json!({"projectId":project}))?;
         if p["project"]["id"] != project {

@@ -119,20 +119,20 @@ export function DesktopConnectionCard() {
         <p className="text-xs text-muted-foreground">
           macOS 启动按钮不可用时，可在终端运行：
           <code className="block break-all">/Applications/ClawKit\ Desktop.app/Contents/MacOS/cc-switch --clawkit-open-codex</code>
-          此入口用于增强同步，不加载设置界面。普通启动仍保留可用的原任务接续能力。
+          此入口用于打开 Codex 和活动视图同步，不加载设置界面。
         </p>
         <p className="text-xs text-muted-foreground">
           {capabilities?.nativeCreation
             ? "手机可在电脑项目内新建对话，无需辅助功能权限。"
-            : "如需手机新建对话，请先正常退出 Codex，再通过上方“打开 Codex”启动。已有任务不会自动中断。"}
+            : status.ordinaryLaunchConfigured
+              ? "普通启动已自动接入：当前任务完成后，正常退出并从 Dock 或应用程序重新打开 Codex，即可手机新建；无需经由 ClawKit 启动。"
+              : status.ordinaryLaunchReason || "启用手机远程后会自动配置 macOS 普通启动入口；已运行的 Codex 不会被重启。"}
         </p>
         <p className="text-xs text-muted-foreground">
           {status.backgroundService
             ? "macOS 独立后台服务已启用：退出 ClawKit 窗口后仍保持连接，登录系统时自动恢复；停止手机远程或退出账号会关闭服务。电脑与 Codex 仍需运行。"
             : "启用后会记住选择，应用启动时自动连接，切换页面不影响连接。电脑、Codex 和 ClawKit 后台需保持运行。"}
-          {capabilities?.nativeCreation
-            ? "支持的任务审批与澄清可在手机处理；身份验证仍需在电脑完成。"
-            : "通过上方入口重新打开 Codex 后，可在手机处理支持的任务审批与澄清。"}
+          支持的任务审批与澄清可在手机处理；身份验证仍需在电脑完成。
         </p>
       </CardContent>
     </Card>

@@ -39,7 +39,8 @@ fn event(record: &Value, thread: &str, offset: u64) -> Option<Value> {
     };
     // Byte position is stable across repeated reads; include the source identity to avoid collisions.
     let id = format!("{:x}", Sha256::digest(format!("{thread}:{offset}:{kind}")));
-    Some(json!({"id":id,"threadId":thread,"kind":kind,"timestamp":record["timestamp"]}))
+    let request = p["call_id"].as_str().or_else(||p["id"].as_str());
+    Some(json!({"id":id,"threadId":thread,"kind":kind,"timestamp":record["timestamp"],"requestId":request}))
 }
 fn scan(path: &Path, thread: &str) -> Result<Vec<Value>, String> {
     let mut f = File::open(path).map_err(|_| "提醒历史暂不可用")?;
@@ -70,6 +71,11 @@ fn scan(path: &Path, thread: &str) -> Result<Vec<Value>, String> {
             continue;
         }
         if let Ok(record) = serde_json::from_slice::<Value>(line) {
+            if record["type"]=="event_msg" && record["payload"]["type"]=="task_complete" {
+                for event in &mut result { let event:&mut Value=event;
+                    if event["kind"]=="attention" { event["resolved"]=json!(true); }
+                }
+            }
             if let Some(value) = event(&record, thread, position) {
                 result.push_back(value);
                 if result.len() > 20 {
@@ -151,6 +157,20 @@ mod tests {
         assert_eq!(result["events"][0]["threadTitle"],"通知标题修复");
         assert_eq!(result["events"][0]["projectName"],"项目大杂烩");
         assert!(!result.to_string().contains("PRIVATE_BODY"));assert!(result.to_string().len()<1024);
+        // Same official unread bucket as the desktop: unread stays, reading resolves.
+        use base64::Engine;
+        let claims=json!({"https://api.openai.com/auth":{"chatgpt_account_id":"qa-account","user_id":"qa-user"}});
+        let token=format!("qa.{}.qa",base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string()));
+        std::fs::write(home.join("auth.json"),json!({"tokens":{"access_token":token}}).to_string()).unwrap();
+        let identity=format!("{:x}",Sha256::digest(b"[\"chatgpt\",\"qa-account\",\"qa-user\"]"));
+        let host=format!("local:{:x}",Sha256::digest(b"[\"local\",\"local\",null]"));
+        let mut state=json!({"electron-thread-read-state-v1":{"unreadByIdentity":{}}});
+        for unread in [true,false] {
+            state["electron-thread-read-state-v1"]["unreadByIdentity"][&identity]=json!({&host:if unread {vec!["target"]} else {vec![]}});
+            std::fs::write(home.join(".codex-global-state.json"),state.to_string()).unwrap();
+            let result=Notifications::default().read(home).unwrap();
+            assert_eq!(result["events"][0]["resolved"]==true,!unread);
+        }
     }
     #[test]
     fn reminders_are_metadata_only_stable_and_ignore_internal_or_partial_output() {

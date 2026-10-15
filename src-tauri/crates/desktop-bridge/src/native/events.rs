@@ -16,13 +16,14 @@ pub(super) struct Events {
     answered_order: VecDeque<String>,
     reminders: VecDeque<Value>,
     reminder_store: Option<super::reminders::Reminders>,
+    request_reminders: HashMap<String,String>,
 }
 
 impl Events {
     pub fn new() -> Self {
         Self { epoch: uuid::Uuid::new_v4().to_string(), seq: 0, bytes: 0,
             retained: VecDeque::new(), pending: HashMap::new(), answered: HashSet::new(),
-            answered_order: VecDeque::new(), reminders: VecDeque::new(), reminder_store: None }
+            answered_order: VecDeque::new(), reminders: VecDeque::new(), reminder_store: None, request_reminders: HashMap::new() }
     }
 
     pub fn open(home: &std::path::Path) -> Self {
@@ -49,7 +50,8 @@ impl Events {
                     "threadId":message["params"]["threadId"],"reason":"待处理请求过多或过大，请在电脑处理"}}));
                 return;
             }
-            self.remind("attention",&message["params"]["threadId"]);
+            let reminder = self.remind("attention",&message["params"]["threadId"]);
+            self.request_reminders.insert(message["id"].to_string(),reminder);
             self.pending.insert(message["id"].to_string(), message.clone());
         } else if method == "serverRequest/resolved" {
             self.resolve(&message["params"]["requestId"]);
@@ -107,7 +109,7 @@ impl Events {
             }
         }
     }
-    fn remind(&mut self,kind:&str,thread:&Value) {
+    fn remind(&mut self,kind:&str,thread:&Value) -> String {
         self.refresh_reminder_identity();
         use sha2::{Digest,Sha256};
         let id=format!("{:x}",Sha256::digest(format!("{}:{}:{kind}:{thread}",self.epoch,self.seq)));
@@ -115,8 +117,16 @@ impl Events {
         if let Some(store) = &mut self.reminder_store { let _ = store.save(&event); }
         self.reminders.push_back(event);
         while self.reminders.len()>100 {self.reminders.pop_front();}
+        id
     }
-    pub fn reminders(&mut self)->Value {self.refresh_reminder_identity();json!({"events":self.reminders,"observedAt":crate::now_ms()})}
+    pub fn reminders(&mut self)->Value {
+        self.refresh_reminder_identity();
+        let mut events=self.reminders.clone();
+        for event in &mut events {
+            if self.request_reminders.values().any(|id|event["id"]==*id) { event["pending"]=json!(true); }
+        }
+        json!({"events":events,"observedAt":crate::now_ms()})
+    }
 
     pub fn position(&self) -> Value { json!({"engineInstanceId":self.epoch,"cursor":self.seq}) }
 
@@ -137,6 +147,10 @@ impl Events {
     pub fn resolve(&mut self, id: &Value) {
         let key = id.to_string();
         if self.pending.remove(&key).is_some() {
+            if let Some(reminder) = self.request_reminders.remove(&key) {
+                for event in &mut self.reminders { if event["id"]==reminder { event["resolved"]=json!(true); } }
+                if let Some(store)=&self.reminder_store { let _=store.resolve(&reminder); }
+            }
             self.answered.insert(key.clone()); self.answered_order.push_back(key);
             while self.answered_order.len() > MAX_EVENTS {
                 if let Some(key) = self.answered_order.pop_front() { self.answered.remove(&key); }
@@ -187,7 +201,11 @@ mod tests {
         events.observe(&json!({"id":7,"method":"item/commandExecution/requestApproval","params":{"threadId":"a"}}));
         let p=json!({"engineInstanceId":events.epoch,"serverRequestId":7,"threadId":"a","decision":"accept"});
         assert_eq!(events.response(&p).unwrap()["result"]["decision"],"accept");
+        events.observe(&json!({"id":8,"method":"item/commandExecution/requestApproval","params":{"threadId":"a"}}));
         events.resolve(&json!(7)); assert!(events.response(&p).is_err());
+        assert_eq!(events.reminders()["events"][1]["pending"],true);
+        assert_ne!(events.reminders()["events"][1]["resolved"],true);
+        assert_eq!(events.reminders()["events"][0]["resolved"],true);
         assert!(events.already_answered(&json!({"id":7,"result":{"decision":"accept"}})));
     }
     #[test]

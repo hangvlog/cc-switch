@@ -19,6 +19,11 @@ type DesktopOutput = Arc<Mutex<std::io::Stdout>>;
 type EventState = Arc<Mutex<super::events::Events>>;
 
 pub fn maybe_run_adapter() {
+    // The GUI and service inherit login-session variables too. They must never
+    // be mistaken for a Codex CLI invocation after ordinary-launch opt-in.
+    if std::env::args().nth(1).is_none_or(|arg| arg.starts_with("--clawkit-") || arg.starts_with("-psn_") || arg.contains("://") || ["--hidden", "--minimized", "--silent"].contains(&arg.as_str())) {
+        return;
+    }
     let Some(real) = std::env::var_os("CLAWKIT_CODEX_ENGINE").map(PathBuf::from) else {
         return;
     };

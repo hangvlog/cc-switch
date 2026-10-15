@@ -10,7 +10,9 @@ pub fn launch(home: &Path, adapter: &Path) -> Result<(), String> {
     if crate::version::running_pid(home).is_some() {
         return Err("Codex 正在运行。请先保存草稿并正常退出 Codex，再点击“打开 Codex”；不会中断正在执行的任务。".into());
     }
-    if std::env::var_os("CODEX_CLI_PATH").is_some() {
+    if std::env::var_os("CODEX_CLI_PATH").is_some_and(|path| {
+        Path::new(&path).canonicalize().ok() != adapter.canonicalize().ok()
+    }) {
         return Err("已设置自定义 Codex 引擎，请先移除该启动覆盖；不会自动替换".into());
     }
     let app = ["/Applications/ChatGPT.app", "/Applications/Codex.app"]

@@ -17,6 +17,8 @@ mod endpoint;
 #[path="endpoint_windows.rs"]
 pub(crate) mod endpoint;
 pub use runtime::maybe_run_adapter;
+#[cfg(target_os = "macos")]
+pub mod ordinary_launch;
 
 #[cfg(target_os = "macos")]
 mod launch;

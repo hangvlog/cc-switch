@@ -10,6 +10,12 @@ fn main() -> Result<(), String> {
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".codex")
         });
+    #[cfg(target_os = "macos")]
+    if let Some(flag @ ("--ordinary-launch-enable" | "--ordinary-launch-disable")) = std::env::args().nth(1).as_deref() {
+        clawkit_desktop_bridge::native::ordinary_launch::configure(
+            &std::env::current_exe().map_err(|e| e.to_string())?, flag.ends_with("enable"))?;
+        return Ok(());
+    }
     #[cfg(unix)]
     if std::env::args().nth(1).as_deref() == Some("--maintain-router") {
         let exe=std::env::current_exe().map_err(|e|e.to_string())?;

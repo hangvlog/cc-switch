@@ -41,6 +41,8 @@ export interface DesktopRemoteStatus {
   phase: string;
   backgroundService?: boolean;
   serviceRunning?: boolean;
+  ordinaryLaunchConfigured?: boolean;
+  ordinaryLaunchReason?: string | null;
   mode?: "desktop-owner";
 }
 export interface DesktopCapabilities {

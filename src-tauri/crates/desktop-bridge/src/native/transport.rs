@@ -29,7 +29,7 @@ pub(super) fn read_line(
 pub(super) fn check_private(path: &Path, directory: bool) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
     let meta = std::fs::symlink_metadata(path)
-        .map_err(|_| "原生新建通道尚未就绪；请从 ClawKit 打开 Codex")?;
+        .map_err(|_| "新建通道尚未接入当前 Codex；请检查电脑远控设置，草稿未发送")?;
     if meta.uid() != unsafe { libc::geteuid() }
         || meta.mode() & 0o077 != 0
         || meta.file_type().is_symlink()
@@ -43,7 +43,7 @@ pub(super) fn check_private(path: &Path, directory: bool) -> Result<(), String> 
 pub(super) fn request(socket: &Path, method: &str, params: Value) -> Result<Value, String> {
     #[cfg(unix)] {check_private(socket.parent().ok_or("通道路径无效")?, true)?; check_private(socket, false)?;}
     let mut stream =
-        super::endpoint::Stream::connect(socket).map_err(|_| "原生新建通道尚未就绪；请从 ClawKit 打开 Codex")?;
+        super::endpoint::Stream::connect(socket).map_err(|_| "新建通道尚未接入当前 Codex；请检查电脑远控设置，草稿未发送")?;
     stream
         .set_read_timeout(Some(Duration::from_secs(if method == "clawkit/status" {
             2

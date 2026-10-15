@@ -190,6 +190,8 @@ pub(super) fn set_enabled(value: bool) -> Result<Value, String> {
             return Err(e);
         }
     } else {
+        let exe = std::env::current_exe().map_err(|_| "无法定位普通启动程序")?;
+        clawkit_desktop_bridge::native::ordinary_launch::configure(&exe, false)?;
         // Preference is checked in the daemon; invalidate dispatch before unloading it.
         for _ in 0..30 {
             if heartbeat().is_none_or(|v| v["serviceRunning"] != true) {
@@ -232,6 +234,9 @@ fn daemon() -> Result<(), String> {
         return Ok(());
     }
     let router_exe = std::env::current_exe().map_err(|_| "无法定位后台程序")?;
+    // Restore the opt-in at login as launchd's environment is scoped to this login session.
+    // Failure must not disable continuation of an already running ordinary Codex.
+    let ordinary_launch = clawkit_desktop_bridge::native::ordinary_launch::configure(&router_exe, true);
     let state = DesktopRemoteState::default();
     let persist = |running: bool| {
         let mut v = state
@@ -241,6 +246,8 @@ fn daemon() -> Result<(), String> {
         v["version"] = json!(VERSION);
         v["serviceRunning"] = json!(running);
         v["updatedAt"] = json!(clawkit_desktop_bridge::now_ms());
+        v["ordinaryLaunchConfigured"] = json!(ordinary_launch.is_ok());
+        v["ordinaryLaunchReason"] = json!(ordinary_launch.as_ref().err());
         write_private(
             &storage().join("service-status.json"),
             v.to_string().as_bytes(),

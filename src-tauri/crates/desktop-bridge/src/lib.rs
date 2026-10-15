@@ -332,7 +332,7 @@ impl Bridge {
         if native::ready(&self.home) {
             Ok(())
         } else {
-            Err("请从 ClawKit 打开 Codex 后再新建".into())
+            Err("当前 Codex 尚未接入新建通道；启用手机远控后，下次正常启动即可接入".into())
         }
     }
 
