@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "cc-switch"
-version = "3.19.66"
+version = "3.19.67"
 dependencies = [
  "anyhow",
  "arboard",
@@ -920,6 +920,7 @@ name = "clawkit-desktop-bridge"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "image",
  "libc",
  "rusqlite",
  "serde_json",
@@ -2628,6 +2629,8 @@ dependencies = [
  "num-traits",
  "png 0.18.1",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

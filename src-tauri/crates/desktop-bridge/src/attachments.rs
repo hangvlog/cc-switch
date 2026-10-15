@@ -139,6 +139,7 @@ impl Attachments {
         {
             return Err("图片不在当前账号中".into());
         }
+        let path=if p["variant"]=="thumbnail" {crate::image_preview::path(&path)?} else {path};
         let mut file = fs::File::open(path).map_err(|_| "图片暂不可用")?;
         let total = file.metadata().map_err(|_| "图片读取失败")?.len();
         if total == 0 || total > MAX as u64 {
@@ -159,10 +160,11 @@ impl Attachments {
             .ok_or("图片读取偏移无效")?;
         file.seek(SeekFrom::Start(offset))
             .map_err(|_| "图片读取失败")?;
-        let mut bytes = vec![0; (total - offset).min(49152) as usize];
+        let chunk=p["chunkSize"].as_u64().unwrap_or(49152).clamp(3,196608)/3*3;
+        let mut bytes = vec![0; (total - offset).min(chunk) as usize];
         file.read_exact(&mut bytes).map_err(|_| "图片读取失败")?;
         Ok(
-            json!({"imageId":id,"offset":offset + bytes.len() as u64,"total":total,"mimeType":mime,"data":STANDARD.encode(bytes)}),
+            json!({"imageId":id,"offset":offset + bytes.len() as u64,"total":total,"mimeType":mime,"variant":if p["variant"]=="thumbnail" {"thumbnail"} else {"original"},"chunkSize":chunk,"data":STANDARD.encode(bytes)}),
         )
     }
     pub(crate) fn import_image(&self, bytes:&[u8])->Result<String,String> {
