@@ -90,6 +90,7 @@ fn visible(
     Some(item)
 }
 
+#[cfg(test)]
 pub fn read(
     home: &Path,
     thread: &str,
@@ -97,6 +98,11 @@ pub fn read(
     users_only: bool,
     attachments: &crate::attachments::Attachments,
 ) -> Result<Value, String> {
+    read_page(home, thread, cursor, users_only, attachments, 20)
+}
+
+pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bool,
+    attachments: &crate::attachments::Attachments, limit: usize) -> Result<Value, String> {
     catalog::verify_thread(home, thread)?;
     let db = catalog::connection(home)?;
     let (path, title, name, cwd, created, updated): (
@@ -196,7 +202,7 @@ pub fn read(
             }
             budget = budget.saturating_sub(cost);
             items.push(item);
-            if items.len() >= 20 {
+            if items.len() >= limit.clamp(1, 20) {
                 next = position;
                 break;
             }
@@ -241,6 +247,11 @@ mod tests {
         )
         .unwrap();
         let attachments = crate::attachments::Attachments::open(root.path()).unwrap();
+        let latest = read_page(root.path(), thread, None, false, &attachments, 1).unwrap();
+        assert_eq!(latest["thread"]["turns"].as_array().unwrap().len(), 1);
+        assert_eq!(latest["thread"]["turns"][0]["items"][0]["id"], "u24");
+        let older = read(root.path(), thread, latest["nextCursor"].as_str(), false, &attachments).unwrap();
+        assert_eq!(older["thread"]["turns"].as_array().unwrap().last().unwrap()["items"][0]["id"], "u23");
         let first = read(root.path(), thread, None, false, &attachments).unwrap();
         assert_eq!(first["thread"]["turns"].as_array().unwrap().len(), 20);
         assert!(!first.to_string().contains("INTERNAL"));

@@ -12,6 +12,7 @@ mod dispatch;
 mod creation_tests;
 mod file_uploads;
 mod history;
+mod latest_message;
 mod ipc;
 #[cfg(all(test, unix))]
 mod ipc_tests;
@@ -169,7 +170,7 @@ impl Bridge {
                 let mut batch=native::read_events(&self.home,params.clone())?;
                 self.project_events(&mut batch);Ok(batch)
             },
-            "desktop/owner/watch" => self.owner_streams.watch(&self.home,&self.output_storage,self.thread(params)?,params["watchId"].as_str().ok_or("Missing watch ID")?),
+            "desktop/owner/watch" => self.owner_streams.watch(&self.home,&self.output_storage,self.thread(params)?,params["watchId"].as_str().ok_or("Missing watch ID")?,params["latestOnly"]==true),
             "desktop/owner/unwatch" => { self.owner_streams.unwatch(self.thread(params)?,params["watchId"].as_str().ok_or("Missing watch ID")?); Ok(json!({"ok":true})) },
             "desktop/owner/respond" => {
                 owner_control::respond(&self.home,self.thread(params)?,params)
@@ -187,7 +188,7 @@ impl Bridge {
             }
             "desktop/thread/subscribe" => {
                 self.thread(params)?;
-                self.native_subscribe(self.thread(params)?)
+                self.native_subscribe_page(self.thread(params)?, params["latestOnly"] == true)
             }
             "desktop/file/read" => {
                 let thread=self.thread(params)?;
@@ -228,14 +229,14 @@ impl Bridge {
                 if offset > 100_000 {
                     return Err("分页游标超出范围".into());
                 }
-                catalog::list(&self.home, offset)
+                catalog::page(&self.home, offset, params["limit"].as_u64().unwrap_or(50).min(50) as usize, params["lightweight"] == true)
             }
             "desktop/thread/history" => {
                 let thread=self.thread(params)?;
                 if let Some(cursor)=params["cursor"].as_str().and_then(|v|v.strip_prefix("engine:")) {
                     self.native_history(thread,cursor)
                 } else {
-                    Ok(conditional_read::response(saved_history::read(&self.home,thread,params["cursor"].as_str(),params["usersOnly"]==true,&self.attachments)?,params["ifVersion"].as_str()))
+                    Ok(conditional_read::response(saved_history::read_page(&self.home,thread,params["cursor"].as_str(),params["usersOnly"]==true,&self.attachments,if params["latestOnly"]==true {1}else{20})?,params["ifVersion"].as_str()))
                 }
             }
             "desktop/thread/read" | "desktop/thread/activate" => {
@@ -271,6 +272,7 @@ impl Bridge {
                         json!("上次发送结果未知，请在原桌面核对，不要重新发送");
                 }
                 visible["desktop"]["queue"] = json!(self.queue.list(thread)?);
+                if params["latestOnly"] == true { latest_message::compact(&mut visible); }
                 Ok(conditional_read::response(json!({"thread":visible}), params["ifVersion"].as_str()))
             }
             "desktop/queue/add" => self.enqueue(params),

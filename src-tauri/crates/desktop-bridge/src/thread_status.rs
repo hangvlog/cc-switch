@@ -69,6 +69,16 @@ pub fn read(home: &Path, params: &Value) -> Result<Value, String> {
     let mut fallback:Vec<_>=data.iter().filter(|r| r["source"]!="owner").cloned().collect();
     crate::unread::annotate(home,&mut fallback);
     for row in &mut data { if row["source"]!="owner" { if let Some(f)=fallback.iter().find(|f| f["id"]==row["id"]) {*row=f.clone();} } }
+    if let Ok(db)=crate::catalog::connection(home) {
+        for row in &mut data {
+            if row["latestReply"].is_null() {
+                let path: Result<String,_>=db.query_row("SELECT rollout_path FROM threads WHERE id=?1",[row["id"].as_str().unwrap_or_default()],|r|r.get(0));
+                if let Ok(path)=path { if let Some(summary)=crate::activity::read(home,row["id"].as_str().unwrap_or_default(),&path) {
+                    row["latestReply"]=summary["summary"].clone();
+                } }
+            }
+        }
+    }
     Ok(json!({"data":data,"observedAt":crate::now_ms()}))
 }
 

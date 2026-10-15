@@ -8,8 +8,12 @@ impl Bridge {
     }
 
     pub(crate) fn native_subscribe(&self, thread: &str) -> Result<Value,String> {
+        self.native_subscribe_page(thread, false)
+    }
+
+    pub(crate) fn native_subscribe_page(&self, thread: &str, latest_only: bool) -> Result<Value,String> {
         let mut result=native::request(&self.home,"thread/resume",json!({"threadId":thread,"excludeTurns":true,
-            "initialTurnsPage":{"limit":30,"itemsView":"full","sortDirection":"desc"}}))?;
+            "initialTurnsPage":{"limit":if latest_only {1}else{30},"itemsView":"full","sortDirection":"desc"}}))?;
         result["thread"]["historyCursor"]=result["initialTurnsPage"]["nextCursor"].as_str().map(|c|json!(format!("engine:{c}"))).unwrap_or(Value::Null);
         if let Some(turns)=result["initialTurnsPage"]["data"].as_array() {
             let mut turns=turns.clone(); turns.reverse(); result["thread"]["turns"]=json!(turns);
@@ -23,6 +27,16 @@ impl Bridge {
         // The page was copied into thread.turns above. Do not send a second,
         // unprojected copy of tool scripts in the engine response envelope.
         result.as_object_mut().unwrap().remove("initialTurnsPage");
+        if latest_only {
+            crate::latest_message::compact(&mut result["thread"]);
+            if !result["thread"]["turns"].as_array().into_iter().flatten().any(|t|t["items"].as_array().is_some_and(|i|!i.is_empty())) {
+                if let Ok(saved)=crate::saved_history::read_page(&self.home,thread,None,false,&self.attachments,1) {
+                    let mut turns=saved["thread"]["turns"].as_array().cloned().unwrap_or_default();
+                    turns.extend(result["thread"]["turns"].as_array().into_iter().flatten().cloned());
+                    result["thread"]["turns"]=json!(turns);
+                }
+            }
+        }
         Ok(result)
     }
 

@@ -16,6 +16,11 @@ pub(crate) fn connection(home: &Path) -> Result<Connection, String> {
 }
 
 pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
+    page(home, offset, 50, false)
+}
+
+pub fn page(home: &Path, offset: usize, limit: usize, lightweight: bool) -> Result<Value, String> {
+    let limit = limit.clamp(1, 50);
     let connection = connection(home)?;
     let mut columns = connection
         .prepare("PRAGMA table_info(threads)")
@@ -50,11 +55,11 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
     };
     let transcript = if columns.iter().any(|c|c=="rollout_path") { "t.rollout_path" } else { "NULL" };
     let thread_source = if columns.iter().any(|c|c=="thread_source") { "t.thread_source" } else { "NULL" };
-    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra},{transcript},{thread_source} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY {activity} DESC,t.id LIMIT 51 OFFSET ?1");
+    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra},{transcript},{thread_source} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY {activity} DESC,t.id LIMIT ?2 OFFSET ?1");
     let mut query = connection
         .prepare(&sql)
         .map_err(|_| "Codex 任务索引结构已变化")?;
-    let rows = query.query_map([offset as i64],|row| Ok(json!({"id":row.get::<_,String>(0)?,
+    let rows = query.query_map([offset as i64, (limit + 1) as i64],|row| Ok(json!({"id":row.get::<_,String>(0)?,
         "preview":row.get::<_,String>(1)?,"cwd":row.get::<_,String>(2)?,"createdAt":row.get::<_,i64>(3)?,
         "updatedAt":row.get::<_,f64>(4)?,"name":row.get::<_,Option<String>>(5)?,
         "projectId":row.get::<_,Option<String>>(6)?,"isPinned":row.get::<_,bool>(7)?,
@@ -63,19 +68,23 @@ pub fn list(home: &Path, offset: usize) -> Result<Value, String> {
     let mut data = rows
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    let next = if data.len() > 50 {
-        data.truncate(50);
-        Some((offset + 50).to_string())
+    let next = if data.len() > limit {
+        data.truncate(limit);
+        Some((offset + limit).to_string())
     } else {
         None
     };
     for thread in &mut data {
-        if let (Some(id),Some(path))=(thread["id"].as_str(),thread["_rollout"].as_str()) {
+        if !lightweight { if let (Some(id),Some(path))=(thread["id"].as_str(),thread["_rollout"].as_str()) {
             if let Some(activity)=crate::activity::read(home,id,path) {
                 thread["latestReply"]=activity["summary"].clone();
             }
         }
+        }
         thread.as_object_mut().unwrap().remove("_rollout");
+        if lightweight {
+            if let Some(preview)=thread["preview"].as_str() {thread["preview"]=json!(preview.chars().take(160).collect::<String>());}
+        }
     }
     crate::unread::annotate(home,&mut data);
     crate::activity_automations::annotate(home, &mut data);
@@ -137,6 +146,11 @@ mod tests {
             CREATE TABLE automation_runs(thread_id TEXT,automation_id TEXT,status TEXT,read_at INTEGER,created_at INTEGER);
             INSERT INTO automations VALUES('local',NULL,NULL,NULL,'heartbeat','ACTIVE','thread-59'),('other','other-account','u','i','heartbeat','ACTIVE','thread-58');
             INSERT INTO automation_runs VALUES('thread-57','local','PENDING_REVIEW',NULL,1),('thread-56','other','PENDING_REVIEW',NULL,1);").unwrap();
+        let lazy = page(root.path(), 0, 20, true).unwrap();
+        assert_eq!(lazy["data"].as_array().unwrap().len(), 20);
+        assert_eq!(lazy["nextCursor"], "20");
+        assert!(lazy["data"][0].get("_rollout").is_none());
+        assert!(lazy["data"][0].get("latestReply").is_none());
         let first = list(root.path(), 0).unwrap();
         assert_eq!(first["data"][0]["hasActiveHeartbeat"],true);
         assert_eq!(first["data"][1]["hasActiveHeartbeat"],false);

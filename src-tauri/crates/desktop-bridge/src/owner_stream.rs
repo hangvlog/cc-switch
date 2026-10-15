@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use std::{collections::HashMap, io::Read, path::{Path, PathBuf}, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::{Duration, Instant}};
 
 struct Entry {
-    watchers: HashMap<String, Instant>,
+    watchers: HashMap<String, (Instant, bool)>,
     generation: String,
     stop: Arc<AtomicBool>,
     latest: Option<Value>,
@@ -21,19 +21,21 @@ impl OwnerStreams {
     pub fn new(enabled: Arc<AtomicBool>) -> Self {
         Self(Arc::new(Inner { entries: Mutex::new(HashMap::new()), enabled }))
     }
-    pub fn watch(&self, home: &Path, storage: &Path, thread: &str, watch: &str) -> Result<Value,String> {
+    pub fn watch(&self, home: &Path, storage: &Path, thread: &str, watch: &str, latest_only: bool) -> Result<Value,String> {
         uuid::Uuid::parse_str(watch).map_err(|_|"Invalid watch ID")?;
         let mut entries=self.0.entries.lock().map_err(|_|"Owner stream unavailable")?;
-        entries.retain(|_,e| {e.watchers.retain(|_,t|t.elapsed()<Duration::from_secs(90));let keep=!e.watchers.is_empty();if !keep {e.stop.store(true,Ordering::SeqCst);}keep});
+        entries.retain(|_,e| {e.watchers.retain(|_,t|t.0.elapsed()<Duration::from_secs(90));let keep=!e.watchers.is_empty();if !keep {e.stop.store(true,Ordering::SeqCst);}keep});
         if let Some(entry)=entries.get_mut(thread) {
             if entry.watchers.len()>=16 && !entry.watchers.contains_key(watch) {return Err("Too many watch leases".into());}
-            entry.watchers.insert(watch.into(),Instant::now());
-            return Ok(json!({"generation":entry.generation,"thread":entry.latest,"sequence":entry.sequence}));
+            entry.watchers.insert(watch.into(),(Instant::now(), latest_only));
+            let mut latest=entry.latest.clone();
+            if latest_only { if let Some(thread)=latest.as_mut() {crate::latest_message::compact(thread);} }
+            return Ok(json!({"generation":entry.generation,"thread":latest,"sequence":entry.sequence}));
         }
         if entries.len()>=2 {return Err("同时同步的会话过多，请稍后重试".into());}
         let generation=uuid::Uuid::new_v4().to_string();
         let stop=Arc::new(AtomicBool::new(false));
-        entries.insert(thread.into(),Entry {watchers:HashMap::from([(watch.to_owned(),Instant::now())]),generation:generation.clone(),stop:stop.clone(),latest:None,pending:false,sequence:0,fingerprint:String::new()});
+        entries.insert(thread.into(),Entry {watchers:HashMap::from([(watch.to_owned(),(Instant::now(), latest_only))]),generation:generation.clone(),stop:stop.clone(),latest:None,pending:false,sequence:0,fingerprint:String::new()});
         let (this,home,storage,thread)=(self.clone(),home.to_owned(),storage.to_owned(),thread.to_owned());
         std::thread::spawn(move || this.run(home,storage,thread,stop));
         Ok(json!({"generation":generation,"thread":null,"sequence":0}))
@@ -45,12 +47,14 @@ impl OwnerStreams {
         if !self.0.enabled.load(Ordering::SeqCst) {return vec![];}
         self.0.entries.lock().map(|mut entries|entries.iter_mut().filter_map(|(id,e)|{
             if !e.pending {return None;}e.pending=false;
-            Some(json!({"method":"desktop/owner/update","params":{"threadId":id,"generation":e.generation,"thread":e.latest,"sequence":e.sequence}}))
+            let mut latest=e.latest.clone();
+            if e.watchers.values().all(|v|v.1) { if let Some(thread)=latest.as_mut() {crate::latest_message::compact(thread);} }
+            Some(json!({"method":"desktop/owner/update","params":{"threadId":id,"generation":e.generation,"thread":latest,"sequence":e.sequence}}))
         }).collect()).unwrap_or_default()
     }
     fn running(&self,thread:&str,stop:&AtomicBool)->bool {
         !stop.load(Ordering::SeqCst) && self.0.enabled.load(Ordering::SeqCst)
-            && self.0.entries.lock().is_ok_and(|e|e.get(thread).is_some_and(|e|e.watchers.values().any(|t|t.elapsed()<Duration::from_secs(90))))
+            && self.0.entries.lock().is_ok_and(|e|e.get(thread).is_some_and(|e|e.watchers.values().any(|t|t.0.elapsed()<Duration::from_secs(90))))
     }
     fn publish(&self,thread:&str,stop:&AtomicBool,visible:Value) {
         if stop.load(Ordering::SeqCst){return;}
