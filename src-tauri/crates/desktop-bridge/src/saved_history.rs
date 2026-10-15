@@ -178,6 +178,7 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
     let mut items = vec![];
     let mut budget = 160000;
     let mut seen = std::collections::HashSet::new();
+    let latest_pair = limit == 1 && !users_only;
     for line in bytes[boundary..].split_inclusive(|b| *b == b'\n').rev() {
         let line_end = position;
         position -= line.len() as u64;
@@ -195,6 +196,10 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
             if !seen.insert(item["id"].as_str().unwrap_or_default().to_owned()) {
                 continue;
             }
+            // Walk the bounded transcript window for the newest query, without
+            // serializing intervening progress messages into the initial page.
+            if latest_pair && !items.is_empty() && item["type"] != "userMessage" { continue; }
+            let query = item["type"] == "userMessage";
             let cost = item.to_string().len();
             if cost > budget && !items.is_empty() {
                 next = line_end;
@@ -202,7 +207,7 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
             }
             budget = budget.saturating_sub(cost);
             items.push(item);
-            if items.len() >= limit.clamp(1, 20) {
+            if (latest_pair && query) || (!latest_pair && items.len() >= limit.clamp(1, 20)) {
                 next = position;
                 break;
             }
@@ -214,12 +219,13 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
     }
     items.reverse();
     let turns:Vec<_>=items.into_iter().map(|item|json!({"id":format!("saved:{}",item["id"].as_str().unwrap_or_default()),"status":"completed","items":[item]})).collect();
-    Ok(
+    let mut result =
         json!({"thread":{"id":thread,"preview":title,"name":name.unwrap_or(title.clone()),"cwd":cwd,
         "createdAt":created,"updatedAt":updated,"turns":turns,
         "desktop":{"source":"history","status":"unknown","canSend":false,"needsActivation":true,"observedAt":crate::now_ms()},
-        "historyCursor":if next>0{Some(next.to_string())}else{None}},"nextCursor":if next>0{Some(next.to_string())}else{None}}),
-    )
+        "historyCursor":if next>0{Some(next.to_string())}else{None}},"nextCursor":if next>0{Some(next.to_string())}else{None}});
+    if latest_pair { crate::latest_message::compact(&mut result["thread"]); }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -277,6 +283,15 @@ mod tests {
                 .unwrap()["items"][0]["id"],
             "u5"
         );
+        lines.push(json!({"type":"event_msg","payload":{"type":"agent_message","message":"latest progress","phase":"commentary"}}).to_string());
+        lines.push(json!({"type":"event_msg","payload":{"type":"agent_message","message":"final reply","phase":"final"}}).to_string());
+        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
+        let pair = read_page(root.path(), thread, None, false, &attachments, 1).unwrap();
+        let pair_items: Vec<_> = pair["thread"]["turns"].as_array().unwrap().iter().flat_map(|t|t["items"].as_array().unwrap()).collect();
+        assert_eq!(pair_items.len(), 2);
+        assert_eq!(pair_items[0]["id"], "u24");
+        assert_eq!(pair_items[1]["text"], "final reply");
+        assert!(!pair.to_string().contains("latest progress"));
         assert!(read(
             root.path(),
             thread,

@@ -3,19 +3,22 @@ use serde_json::{json, Value};
 
 pub fn compact(thread: &mut Value) {
     let Some(turns) = thread["turns"].as_array() else { return };
-    let latest = turns.iter().enumerate().rev().find_map(|(index, turn)| {
-        turn["items"].as_array()?.iter().rev().find(|item| {
-            matches!(item["type"].as_str(), Some("agentMessage" | "userMessage"))
-                && item["phase"] != "analysis" && item["channel"] != "analysis"
-        }).map(|item| (index, item.clone()))
-    });
+    let mut keep = Vec::new();
+    let mut reply = false;
+    'outer: for (t, turn) in turns.iter().enumerate().rev() {
+        let Some(items) = turn["items"].as_array() else { continue };
+        for (i, item) in items.iter().enumerate().rev() {
+            if item["phase"] == "analysis" || item["channel"] == "analysis" { continue; }
+            if item["type"] == "userMessage" { keep.push((t, i)); break 'outer; }
+            if item["type"] == "agentMessage" && !reply { keep.push((t, i)); reply = true; }
+        }
+    }
     let output: Vec<_> = turns.iter().enumerate().filter_map(|(index, turn)| {
         let mut result = turn.clone();
-        if let Some((_, item)) = latest.as_ref().filter(|(i, _)| *i == index) {
-            result["items"] = json!([item]);
-        } else if turn["status"] == "inProgress" {
-            result["items"] = json!([]);
-        } else { return None; }
+        let items: Vec<_> = turn["items"].as_array().into_iter().flatten().enumerate()
+            .filter(|(i, _)| keep.contains(&(index, *i))).map(|(_, item)| item).collect();
+        if items.is_empty() && turn["status"] != "inProgress" { return None; }
+        result["items"] = json!(items);
         Some(result)
     }).collect();
     thread["turns"] = json!(output);
@@ -35,8 +38,8 @@ mod tests {
             {"id":"active","status":"inProgress","items":[{"id":"tool","type":"toolActivity"}]}],
             "desktop":{"status":"waiting","activeTurnId":"active","clarifications":[{"requestId":1}]}});
         compact(&mut thread);
-        assert_eq!(thread["turns"][0]["items"].as_array().unwrap().len(),1);
-        assert_eq!(thread["turns"][0]["items"][0]["id"],"a");
+        assert_eq!(thread["turns"][0]["items"].as_array().unwrap().len(),2);
+        assert_eq!(thread["turns"][0]["items"][0]["id"],"u");
         assert_eq!(thread["turns"][1]["id"],"active");
         assert_eq!(thread["desktop"]["status"],"waiting");
         assert_eq!(thread["desktop"]["clarifications"][0]["requestId"],1);

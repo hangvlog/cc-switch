@@ -110,13 +110,15 @@ pub fn visible_thread(
     let mut seen = HashSet::new();
     // Newest first while enforcing the limit; restore chronological order afterward.
     let mut output = Vec::new();
+    let mut query_seen = false;
     for turn in recent.iter().rev() {
         let mut items = Vec::new();
         for item in turn["items"].as_array().into_iter().flatten().rev() {
-            if count >= 80 || budget == 0 {
-                break;
-            }
             let kind = item["type"].as_str().unwrap_or("");
+            let query = kind == "userMessage" || (kind == "steeringUserMessage"
+                && item["status"].as_str().is_none_or(|s| s == "accepted"));
+            // Reserve the latest query even after a long stream of tool output.
+            if (count >= 80 || budget == 0) && !(query && !query_seen) { continue; }
             if !matches!(kind, "userMessage" | "steeringUserMessage" | "agentMessage") {
                 if let Some(projected) = crate::owner_output::project(item, attachments, &mut budget) {
                     if seen.insert(projected["id"].as_str().unwrap_or_default().to_owned()) {
@@ -171,6 +173,7 @@ pub fn visible_thread(
             if raw.is_empty() {
                 continue;
             }
+            if query { query_seen = true; }
             let text = bounded_text(&raw, &mut budget);
             items.push(if kind == "agentMessage" {
                 json!({"id":key,"type":"agentMessage","text":text,"phase":item["phase"]})
@@ -197,6 +200,19 @@ pub fn visible_thread(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compact_context_keeps_query_after_many_updates() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::attachments::Attachments::open(root.path()).unwrap();
+        let mut items = vec![json!({"id":"query","type":"userMessage","content":[{"type":"text","text":"user question"}]})];
+        for i in 0..100 { items.push(json!({"id":format!("a{i}"),"type":"agentMessage","phase":"commentary","text":"progress"})); }
+        let state = json!({"turns":[{"turnId":"active","status":"inProgress","items":items}]});
+        let mut visible = visible_thread(&state,"owner",1,&store);
+        crate::latest_message::compact(&mut visible);
+        assert_eq!(visible["turns"][0]["items"].as_array().unwrap().len(),2);
+        assert_eq!(visible["turns"][0]["items"][0]["id"],"query");
+        assert_eq!(visible["turns"][0]["items"][1]["id"],"a99");
+    }
     #[test]
     fn optimistic_user_messages_do_not_confirm_acceptance() {
         let mut state = json!({"turns":[{"params":{"clientUserMessageId":"r"},"items":[
