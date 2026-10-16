@@ -37,9 +37,19 @@ pub fn read(home: &Path, params: &Value) -> Result<Value, String> {
     let ids = params["threadIds"].as_array().filter(|ids| ids.len() <= 32)
         .ok_or("一次最多查询 32 个会话状态")?;
     let mut threads = Vec::new();
+    let mut unavailable = Vec::new();
+    let db = crate::catalog::connection(home)?;
     for id in ids {
         let id = id.as_str().ok_or("会话 ID 无效")?;
-        crate::catalog::verify_thread(home, id)?;
+        uuid::Uuid::parse_str(id).map_err(|_| "任务 ID 无效")?;
+        let eligible: bool = db.query_row("SELECT EXISTS(SELECT 1 FROM threads WHERE id=?1 AND archived=0 AND source NOT LIKE '%subAgent%')",
+            [id], |row| row.get(0)).map_err(|_| "任务索引读取失败")?;
+        if !eligible {
+            if !unavailable.iter().any(|row: &Value| row["id"] == id) {
+                unavailable.push(json!({"id":id,"status":"unavailable","source":"catalog","observedAt":crate::now_ms()}));
+            }
+            continue;
+        }
         if !threads.contains(&id) { threads.push(id); }
     }
     let mut observations=HashMap::new();
@@ -79,6 +89,7 @@ pub fn read(home: &Path, params: &Value) -> Result<Value, String> {
             }
         }
     }
+    data.extend(unavailable);
     Ok(json!({"data":data,"observedAt":crate::now_ms()}))
 }
 
