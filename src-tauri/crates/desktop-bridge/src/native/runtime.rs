@@ -24,19 +24,28 @@ pub fn maybe_run_adapter() {
     if std::env::args().nth(1).is_none_or(|arg| arg.starts_with("--clawkit-") || arg.starts_with("-psn_") || arg.contains("://") || ["--hidden", "--minimized", "--silent"].contains(&arg.as_str())) {
         return;
     }
-    let Some(real) = std::env::var_os("CLAWKIT_CODEX_ENGINE").map(PathBuf::from) else {
-        return;
-    };
     let current = std::env::current_exe().ok();
     if std::env::var_os("CODEX_CLI_PATH").map(PathBuf::from).and_then(|p|p.canonicalize().ok()) != current.as_ref().and_then(|p|p.canonicalize().ok()) {
         return;
     }
-    if !real.is_absolute() || !real.is_file() || Some(&real) == current.as_ref() {
+    // Official helper runtimes preserve CODEX_CLI_PATH but may drop our private
+    // engine variable. A CLI invocation must never fall through to the GUI.
+    let configured = std::env::var_os("CLAWKIT_CODEX_ENGINE").map(PathBuf::from);
+    let primary = configured.is_some();
+    let real = configured.or_else(|| {
+        #[cfg(target_os = "macos")]
+        { super::ordinary_launch::engine().ok() }
+        #[cfg(not(target_os = "macos"))]
+        { None }
+    });
+    let Some(real) = real.filter(|p| p.is_absolute() && p.is_file()
+        && p.canonicalize().ok() != current.as_ref().and_then(|c| c.canonicalize().ok())) else {
+        eprintln!("ClawKit CLI engine unavailable; graphical application was not started");
         std::process::exit(2);
-    }
+    };
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let values: Vec<_> = args.iter().map(|a| a.to_string_lossy()).collect();
-    let main = is_main(&values.iter().map(|s| s.as_ref()).collect::<Vec<_>>());
+    let main = primary && is_main(&values.iter().map(|s| s.as_ref()).collect::<Vec<_>>());
     let mut command = Command::new(&real);
     command
         .args(&args)

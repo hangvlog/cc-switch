@@ -22,3 +22,8 @@ Validation: 18 bridge tests passed, including document bytes/retries/scope/path 
 `desktop/thread/create` and `desktop/creation/read` now accept a missing/null projectId. Projectless receipts use an empty internal key, never a fabricated project UUID; malformed non-null IDs remain rejected. A private, per-request workspace is created under the current user's Documents/Codex/date directory after the durable receipt is inserted. No arbitrary cwd, model, or permission override is accepted from mobile. Exact client message ID reconciliation, account scope and no resend on unknown results remain unchanged. The official application bundle and ongoing engine are not modified or restarted.
 
 The mobile new-chat screen supports clearing a project and sending without one. Validation covers both null and concrete project IDs against the installed official engine, first reply, duplicate suppression and receipt scope; release/install evidence lives in the parent repository.
+
+
+## 2026-10-16：工具子进程丢失引擎变量
+
+官方工具运行时可能保留 `CODEX_CLI_PATH=ClawKit Desktop`，同时清除 `CLAWKIT_CODEX_ENGINE`。旧适配器直接返回并落入 Tauri GUI，导致短命 GUI 启动及 stdio 协议失败。适配器现先核验调用指向自身；缺少私有变量时，macOS 从既有官方安装位置解析引擎并直接 exec，不能进入 GUI，也不持有主任务 socket。显式引擎路径无效时失败退出，不替换用户覆盖。已有主任务继续原连接，无需重启官方 Codex。

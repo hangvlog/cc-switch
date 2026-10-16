@@ -23,7 +23,7 @@ fn set(key: &str, value: Option<&str>) -> Result<(), String> {
     else { Err("系统未能保存普通启动配置".into()) }
 }
 
-fn engine() -> Result<PathBuf, String> {
+pub(crate) fn engine() -> Result<PathBuf, String> {
     ["/Applications/ChatGPT.app", "/Applications/Codex.app"].iter()
         .map(|p| Path::new(p).join("Contents/Resources/codex-cli/bin/codex"))
         .find(|p| p.is_file()).ok_or_else(|| "请先安装 Codex 桌面端".into())
