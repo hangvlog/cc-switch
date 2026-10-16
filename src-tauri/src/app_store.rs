@@ -6,7 +6,7 @@ use tauri_plugin_store::StoreExt;
 use crate::error::AppError;
 
 /// Store 中的键名
-const STORE_KEY_APP_CONFIG_DIR: &str = "app_config_dir_override";
+const STORE_KEY_APP_CONFIG_DIR: &str = "clawkit_config_dir_override";
 
 /// 缓存当前的 app_config_dir 覆盖路径，避免存储 AppHandle
 static APP_CONFIG_DIR_OVERRIDE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
@@ -44,14 +44,6 @@ fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
 
             let path = resolve_path(path_str);
 
-            if !path.exists() {
-                log::warn!(
-                    "Store 中配置的 app_config_dir 不存在: {path:?}\n\
-                     将使用默认路径。"
-                );
-                return None;
-            }
-
             log::info!("使用 Store 中的 app_config_dir: {path:?}");
             Some(path)
         }
@@ -84,6 +76,7 @@ pub fn set_app_config_dir_to_store(
         Some(p) => {
             let trimmed = p.trim();
             if !trimmed.is_empty() {
+                crate::data_directory::validate_destination(&resolve_path(trimmed))?;
                 store.set(STORE_KEY_APP_CONFIG_DIR, Value::String(trimmed.to_string()));
                 log::info!("已将 app_config_dir 写入 Store: {trimmed}");
             } else {
@@ -132,4 +125,26 @@ pub fn migrate_app_config_dir_from_settings(app: &tauri::AppHandle) -> Result<()
 
     let _ = refresh_app_config_dir_override(app);
     Ok(())
+}
+
+/// Read the old override only as a migration source. Never cache it as a live path.
+pub(crate) fn legacy_app_config_dir(app: &tauri::AppHandle) -> Result<Option<PathBuf>, AppError> {
+    let store = app
+        .store_builder("app_paths.json")
+        .build()
+        .map_err(|e| AppError::Config(format!("读取旧目录设置失败: {e}")))?;
+    let Some(Value::String(raw)) = store.get("app_config_dir_override") else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    let path = resolve_path(raw.trim());
+    if !path.is_dir() {
+        return Err(AppError::Config(format!(
+            "旧数据目录不可访问，请恢复目录后重试：{}",
+            path.display()
+        )));
+    }
+    Ok(Some(path))
 }

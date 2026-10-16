@@ -1022,3 +1022,156 @@ fn ensure_incremental_auto_vacuum_rebuilds_existing_file_db() {
         "file db should persist INCREMENTAL auto_vacuum after VACUUM rebuild"
     );
 }
+
+#[test]
+fn clawkit_directory_migration_preserves_wal_and_isolates_writes() {
+    use crate::data_directory::migrate;
+    let home = tempfile::tempdir().unwrap();
+    let old = home.path().join(".cc-switch");
+    let new = home.path().join(".clawkit");
+    std::fs::create_dir_all(old.join("skills/example")).unwrap();
+    std::fs::write(old.join("skills/example/SKILL.md"), "original skill").unwrap();
+    std::fs::write(old.join("settings.json"), r#"{"language":"zh","webdavSync":{"enabled":true,"autoSync":true,"password":"fixture-secret","remoteRoot":"cc-switch-sync"},"s3Sync":{"enabled":true,"autoSync":true,"secretAccessKey":"fixture-key"}}"#).unwrap();
+    let source = rusqlite::Connection::open(old.join("cc-switch.db")).unwrap();
+    source.execute_batch("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; PRAGMA user_version=20; CREATE TABLE preserved (value TEXT); INSERT INTO preserved VALUES ('wal-only');").unwrap();
+    let before = std::fs::read(old.join("cc-switch.db")).unwrap();
+    let wal_before = std::fs::read(old.join("cc-switch.db-wal")).unwrap();
+    let settings_before = std::fs::read(old.join("settings.json")).unwrap();
+    assert!(migrate(&old, &old.join("settings.json"), &new).unwrap());
+    assert_eq!(std::fs::read(old.join("cc-switch.db")).unwrap(), before);
+    assert_eq!(
+        std::fs::read(old.join("cc-switch.db-wal")).unwrap(),
+        wal_before
+    );
+    assert_eq!(
+        std::fs::read(old.join("settings.json")).unwrap(),
+        settings_before
+    );
+    assert!(!new.join("cc-switch.db").exists());
+    let target = rusqlite::Connection::open(new.join("clawkit.db")).unwrap();
+    assert_eq!(
+        target
+            .query_row("SELECT value FROM preserved", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "wal-only"
+    );
+    assert_eq!(
+        target
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i32>(0))
+            .unwrap(),
+        20
+    );
+    target
+        .execute("UPDATE preserved SET value='clawkit-only'", [])
+        .unwrap();
+    std::fs::write(new.join("skills/example/SKILL.md"), "new skill").unwrap();
+    source
+        .execute("UPDATE preserved SET value='cc-switch-only'", [])
+        .unwrap();
+    assert!(!migrate(&old, &old.join("settings.json"), &new).unwrap());
+    assert_eq!(
+        target
+            .query_row("SELECT value FROM preserved", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "clawkit-only"
+    );
+    assert_eq!(
+        source
+            .query_row("SELECT value FROM preserved", [], |r| r.get::<_, String>(0))
+            .unwrap(),
+        "cc-switch-only"
+    );
+    assert_eq!(
+        std::fs::read_to_string(old.join("skills/example/SKILL.md")).unwrap(),
+        "original skill"
+    );
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(new.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(settings["webdavSync"]["enabled"], false);
+    assert_eq!(settings["webdavSync"]["autoSync"], false);
+    assert_eq!(settings["webdavSync"]["password"], "fixture-secret");
+    assert_eq!(settings["s3Sync"]["autoSync"], false);
+    assert_eq!(settings["s3Sync"]["secretAccessKey"], "fixture-key");
+}
+
+#[test]
+fn clawkit_directory_migration_fresh_conflict_failure_and_retry() {
+    use crate::data_directory::{migrate, validate_destination};
+    let home = tempfile::tempdir().unwrap();
+    let old = home.path().join(".cc-switch");
+    let new = home.path().join(".clawkit");
+    assert!(migrate(&old, &old.join("settings.json"), &new).unwrap());
+    assert!(!old.exists());
+    assert!(!migrate(&old, &old.join("settings.json"), &new).unwrap());
+    assert!(validate_destination(&old).is_err());
+    assert!(validate_destination(&old.join("child")).is_err());
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("cc-switch.db"), "corrupt").unwrap();
+    let retry = home.path().join("retry");
+    assert!(migrate(&old, &old.join("settings.json"), &retry).is_err());
+    assert!(!retry.exists());
+    assert_eq!(
+        std::fs::read_to_string(old.join("cc-switch.db")).unwrap(),
+        "corrupt"
+    );
+    let custom = home.path().join("custom-legacy");
+    std::fs::create_dir_all(&custom).unwrap();
+    let conn = rusqlite::Connection::open(custom.join("cc-switch.db")).unwrap();
+    conn.execute_batch(
+        "CREATE TABLE preserved (value TEXT); INSERT INTO preserved VALUES ('custom');",
+    )
+    .unwrap();
+    drop(conn);
+    std::fs::write(old.join("settings.json"), r#"{"language":"ja"}"#).unwrap();
+    assert!(migrate(&custom, &old.join("settings.json"), &retry).unwrap());
+    assert!(validate_destination(&custom).is_err());
+    assert_eq!(
+        std::fs::read_to_string(retry.join("settings.json")).unwrap(),
+        "{\n  \"language\": \"ja\"\n}"
+    );
+    let conflict = home.path().join("conflict");
+    std::fs::create_dir(&conflict).unwrap();
+    std::fs::write(conflict.join("important"), "keep").unwrap();
+    assert!(migrate(&custom, &old.join("settings.json"), &conflict).is_err());
+    assert_eq!(
+        std::fs::read_to_string(conflict.join("important")).unwrap(),
+        "keep"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn clawkit_directory_migration_materializes_internal_links_and_rejects_external_links() {
+    use crate::data_directory::migrate;
+    use std::os::unix::fs::{symlink, PermissionsExt};
+    let home = tempfile::tempdir().unwrap();
+    let old = home.path().join(".cc-switch");
+    let dest = home.path().join(".clawkit");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::write(old.join("data"), "original").unwrap();
+    symlink("data", old.join("link")).unwrap();
+    assert!(migrate(&old, &old.join("settings.json"), &dest).unwrap());
+    assert!(!std::fs::symlink_metadata(dest.join("link"))
+        .unwrap()
+        .is_symlink());
+    assert_eq!(
+        std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        std::fs::metadata(dest.join("data"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    symlink(home.path(), old.join("external")).unwrap();
+    assert!(migrate(
+        &old,
+        &old.join("settings.json"),
+        &home.path().join("blocked")
+    )
+    .is_err());
+    assert!(!home.path().join("blocked").exists());
+}

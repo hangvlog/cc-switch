@@ -134,8 +134,8 @@ fn build_bundle(
     )?;
     add_sanitized_file(
         &mut entries,
-        "cc-switch.log",
-        &app_dir.join("logs").join("cc-switch.log"),
+        "clawkit.log",
+        &app_dir.join("logs").join("clawkit.log"),
         true,
         &secrets,
     )?;
@@ -328,7 +328,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(
-            app.path().join("logs/cc-switch.log"),
+            app.path().join("logs/clawkit.log"),
             "request Authorization: Bearer eyJabcdefgh.ijklmnop.qrstuvwx\napi sk-testsecret123\n",
         )
         .unwrap();
@@ -338,7 +338,7 @@ mod tests {
         let names: Vec<String> = archive.file_names().map(str::to_string).collect();
         assert!(names.contains(&"manifest.json".to_string()));
         assert!(names.contains(&"codex-config.toml".to_string()));
-        assert!(names.contains(&"cc-switch.log".to_string()));
+        assert!(names.contains(&"clawkit.log".to_string()));
         assert!(!names.contains(&"auth.json".to_string()));
 
         let mut combined = String::new();
