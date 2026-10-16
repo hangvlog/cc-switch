@@ -279,7 +279,7 @@ impl Bridge {
             "desktop/thread/create" => self.create(params),
             "desktop/creation/read" => {
                 let id = request_id(params)?;
-                let project = params["projectId"].as_str().ok_or("缺少项目 ID")?;
+                let project = native::creation::project_key(params)?;
                 if self.native_creations.exists(id) {
                     self.native_creations.read(&self.home, id, project)
                 } else {
@@ -313,10 +313,10 @@ impl Bridge {
         if object.keys().any(|key| {
             !["projectId", "requestId", "text", "images", "files"].contains(&key.as_str())
         }) {
-            return Err("新建仅接受电脑项目和首条消息，模型与权限沿用 Codex 设置".into());
+            return Err("新建仅接受可选项目和首条消息，模型与权限沿用 Codex 设置".into());
         }
         let id = request_id(params)?;
-        let project_id = params["projectId"].as_str().ok_or("请选择电脑项目")?;
+        let project_id = native::creation::project_key(params)?;
         let message = attachments::Message::parse(params)?;
         let text = &message.identity();
         let input = self.attachments.input(&message)?;

@@ -57,23 +57,31 @@ impl NativeCreations {
             }
             return self.read(home, id, project);
         }
-        uuid::Uuid::parse_str(project).map_err(|_| "项目 ID 无效")?;
+        if !project.is_empty() {
+            uuid::Uuid::parse_str(project).map_err(|_| "项目 ID 无效")?;
+        }
         if !enabled.load(Ordering::SeqCst) {
             return Err("远程连接已关闭，尚未发送".into());
         }
         if !super::ready(home) {
             return Err("当前 Codex 尚未接入新建通道；启用手机远控后，下次正常启动 Codex 即可接入，无需中断当前任务".into());
         }
-        let p = super::request(home, "project/read", json!({"projectId":project}))?;
-        if p["project"]["id"] != project {
-            return Err("电脑项目未同步，尚未发送".into());
-        }
-        let cwd = p["project"]["roots"][0]["path"]
-            .as_str()
-            .ok_or("项目没有工作目录")?;
-        if !Path::new(cwd).is_absolute() || !Path::new(cwd).is_dir() {
-            return Err("项目工作目录不存在".into());
-        }
+        let cwd = if project.is_empty() {
+            None
+        } else {
+            let p = super::request(home, "project/read", json!({"projectId":project}))?;
+            if p["project"]["id"] != project {
+                return Err("电脑项目未同步，尚未发送".into());
+            }
+            let cwd = p["project"]["roots"][0]["path"]
+                .as_str()
+                .ok_or("项目没有工作目录")?
+                .to_owned();
+            if !Path::new(&cwd).is_absolute() || !Path::new(&cwd).is_dir() {
+                return Err("项目工作目录不存在".into());
+            }
+            Some(cwd)
+        };
         self.0
             .execute(
                 "INSERT INTO native_creations VALUES(?1,?2,?3,NULL,'unknown')",
@@ -84,13 +92,35 @@ impl NativeCreations {
             self.mark(id, "rejected")?;
             return self.read(home, id, project);
         }
+        let cwd = match cwd
+            .map(Ok)
+            .unwrap_or_else(|| self.projectless_directory(id))
+        {
+            Ok(cwd) => cwd,
+            Err(error) => {
+                self.mark(id, "rejected")?;
+                return Err(error);
+            }
+        };
+        let project_value = if project.is_empty() {
+            Value::Null
+        } else {
+            json!(project)
+        };
         // Once the request enters the transport, failures remain unknown and are not retried.
-        let started = super::request(home, "thread/start", json!({"projectId":project,"cwd":cwd}));
+        let started = super::request(
+            home,
+            "thread/start",
+            json!({"projectId":project_value,"cwd":cwd}),
+        );
         if let Ok(started) = started {
-            if let Some(thread) = started["thread"]["id"]
-                .as_str()
-                .filter(|_| started["thread"]["projectId"] == project)
-            {
+            if let Some(thread) = started["thread"]["id"].as_str().filter(|_| {
+                matches_project(&started["thread"], project)
+                    && started["thread"]["cwd"].as_str().is_some_and(|returned| {
+                        Path::new(returned).canonicalize().ok()
+                            == Path::new(&cwd).canonicalize().ok()
+                    })
+            }) {
                 uuid::Uuid::parse_str(thread).map_err(|_| "Codex 返回了无效对话编号")?;
                 self.0
                     .execute(
@@ -113,6 +143,26 @@ impl NativeCreations {
         }
         self.read(home, id, project)
     }
+    fn projectless_directory(&self, id: &str) -> Result<String, String> {
+        // Match Codex's projectless workspace convention, never inherit an engine's
+        // process cwd (which can be a previous project or the user's home).
+        uuid::Uuid::parse_str(id).map_err(|_| "新建请求编号无效")?;
+        let user = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+            .map(std::path::PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .ok_or("找不到电脑用户目录")?;
+        let date: String = self
+            .0
+            .query_row("SELECT strftime('%Y-%m-%d','now','localtime')", [], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        let parent = user.join("Documents").join("Codex").join(date);
+        std::fs::create_dir_all(&parent).map_err(|e| format!("无法创建无项目工作目录：{e}"))?;
+        let directory = parent.join(format!("chat-{id}"));
+        std::fs::create_dir(&directory).map_err(|e| format!("无法创建无项目工作目录：{e}"))?;
+        Ok(directory.to_string_lossy().into_owned())
+    }
     fn mark(&self, id: &str, status: &str) -> Result<(), String> {
         self.0
             .execute(
@@ -131,7 +181,7 @@ impl NativeCreations {
                     "thread/read",
                     json!({"threadId":thread,"includeTurns":true}),
                 ) {
-                    let confirmed = value["thread"]["projectId"] == project
+                    let confirmed = matches_project(&value["thread"], project)
                         && value["thread"]["turns"].as_array().is_some_and(|turns| {
                             turns.iter().any(|t| {
                                 t["items"].as_array().is_some_and(|items| {
@@ -149,7 +199,23 @@ impl NativeCreations {
             }
         }
         Ok(
-            json!({"requestId":id,"projectId":project,"threadId":thread,"status":status,"via":"native-engine"}),
+            json!({"requestId":id,"projectId":if project.is_empty() {Value::Null} else {json!(project)},"threadId":thread,"status":status,"via":"native-engine"}),
         )
+    }
+}
+
+// An empty durable key represents explicit no-project, distinct from every UUID.
+pub(crate) fn project_key(params: &Value) -> Result<&str, String> {
+    match &params["projectId"] {
+        Value::Null => Ok(""),
+        Value::String(id) if uuid::Uuid::parse_str(id).is_ok() => Ok(id),
+        _ => Err("项目 ID 无效".into()),
+    }
+}
+fn matches_project(thread: &Value, project: &str) -> bool {
+    if project.is_empty() {
+        thread["projectId"].is_null()
+    } else {
+        thread["projectId"] == project
     }
 }

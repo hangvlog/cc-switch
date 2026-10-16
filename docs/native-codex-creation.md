@@ -15,3 +15,10 @@ Validation: bridge unit tests; isolated real Codex engine with synthetic Respons
 The bridge advertises fileAttachments and accepts desktop/file/chunk. Documents are stored under the authenticated account storage, with bounded uploads, immutable content/name IDs, private filesystem permissions, retry checks and a 256 MiB quota. Only uploaded IDs may be submitted. New/continued/queued messages carry document references; the official engine receives original filenames and local paths in a text input and reads them using its existing tools and permissions. Images keep their localImage contract. Queue migration adds files with an empty default, retains references over restart and includes them in request identity.
 
 Validation: 18 bridge tests passed, including document bytes/retries/scope/path checks and persisted file queue references. Isolated official engine creation, input reception, duplicate suppression, continuation and restart receipt checks pass. Native application and release acceptance remain separate.
+
+
+## Optional project (3.19.70)
+
+`desktop/thread/create` and `desktop/creation/read` now accept a missing/null projectId. Projectless receipts use an empty internal key, never a fabricated project UUID; malformed non-null IDs remain rejected. A private, per-request workspace is created under the current user's Documents/Codex/date directory after the durable receipt is inserted. No arbitrary cwd, model, or permission override is accepted from mobile. Exact client message ID reconciliation, account scope and no resend on unknown results remain unchanged. The official application bundle and ongoing engine are not modified or restarted.
+
+The mobile new-chat screen supports clearing a project and sending without one. Validation covers both null and concrete project IDs against the installed official engine, first reply, duplicate suppression and receipt scope; release/install evidence lives in the parent repository.

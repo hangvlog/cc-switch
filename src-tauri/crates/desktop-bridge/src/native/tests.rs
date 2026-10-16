@@ -48,7 +48,7 @@ fn native_creation_is_account_scoped_and_reconciles_only_exact_client_id() {
                 "project/read" => json!({"result":{"project":{"id":p,"roots":[{"path":cwd}]}}}),
                 "thread/start" => {
                     count.fetch_add(1, Ordering::SeqCst);
-                    json!({"result":{"thread":{"id":t,"projectId":p}}})
+                    json!({"result":{"thread":{"id":t,"projectId":p,"cwd":cwd}}})
                 }
                 // Simulate lost first-turn response after the engine has accepted it.
                 "turn/start" => json!({"error":{"code":-32002}}),
