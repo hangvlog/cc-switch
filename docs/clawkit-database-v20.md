@@ -32,10 +32,12 @@ Validation on 2026-10-16:
   Cargo unit-test entry could not run offline because cached `scc v2.4.0` is
   missing; dependencies were not installed automatically.
 
-Delivery is incomplete: HANG initially verified as `hang\14802`, then its relay
-reported `RELAY_FAILED`; three resource-check attempts ended with SSH connection
-reset. No Windows installer was built, published, or installed, and the affected
-computer has not been identified/connected. No user database was modified.
+Release candidate: 3.19.73. HANG initially reported `RELAY_FAILED` after identity
+verification, then recovered. A fresh resource check verified `hang\14802`,
+265 GiB free on C:, about 18 GiB free RAM, Rust 1.95, Node and pnpm. Windows
+build/packaging will use the pushed commit and existing locked dependencies.
+The affected computer has not yet been identified/connected. No user database
+was modified. Package and acceptance receipts are tracked in the parent repo.
 
 Before deployment, build from the pushed commit on the selected Windows host,
 retain the previous installer, and back up the target DB via SQLite backup API
