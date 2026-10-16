@@ -216,6 +216,108 @@ fn schema_migration_rejects_future_version() {
 }
 
 #[test]
+fn schema_v20_preserves_shared_upstream_configuration() {
+    for version in [18, 19, 20] {
+        let file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(file.path()).unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        if version < 20 {
+            conn.execute_batch("ALTER TABLE mcp_servers DROP COLUMN enabled_pi;")
+                .unwrap();
+        }
+        if version < 19 {
+            conn.execute_batch(
+                "ALTER TABLE mcp_servers DROP COLUMN enabled_mcode;
+                 ALTER TABLE skills DROP COLUMN enabled_mcode;",
+            )
+            .unwrap();
+        }
+        Database::set_user_version(&conn, version).unwrap();
+        conn.execute_batch(
+            "INSERT INTO mcp_servers (id, name, server_config, enabled_codex)
+             VALUES ('shared-mcp', 'Shared MCP', '{\"command\":\"echo\"}', 1);
+             INSERT INTO skills (id, name, directory, enabled_codex)
+             VALUES ('shared-skill', 'Shared Skill', 'synthetic', 1);
+             INSERT INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('upstream-provider', 'mcode', 'Upstream', '{}', '{\"keep\":true}');",
+        )
+        .unwrap();
+        if version >= 19 {
+            conn.execute_batch(
+                "UPDATE mcp_servers SET enabled_mcode=1;
+                 UPDATE skills SET enabled_mcode=1;",
+            )
+            .unwrap();
+        }
+        if version == 20 {
+            conn.execute_batch("UPDATE mcp_servers SET enabled_pi=1;")
+                .unwrap();
+        }
+        assert_eq!(
+            Database::stored_user_version_exceeds_supported(file.path()).unwrap(),
+            None
+        );
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        assert_eq!(Database::get_user_version(&conn).unwrap(), 20);
+        let db = Database {
+            conn: Mutex::new(conn),
+        };
+        let mut mcp = db
+            .get_all_mcp_servers()
+            .unwrap()
+            .shift_remove("shared-mcp")
+            .unwrap();
+        let mut skill = db.get_installed_skill("shared-skill").unwrap().unwrap();
+        assert!(mcp.apps.codex && skill.apps.codex);
+        mcp.name = "Edited MCP".into();
+        skill.name = "Edited Skill".into();
+        db.save_mcp_server(&mcp).unwrap();
+        db.save_skill(&skill).unwrap();
+        assert_eq!(
+            db.get_all_mcp_servers().unwrap()["shared-mcp"].name,
+            "Edited MCP"
+        );
+        assert_eq!(
+            db.get_installed_skill("shared-skill")
+                .unwrap()
+                .unwrap()
+                .name,
+            "Edited Skill"
+        );
+        let conn = db.conn.lock().unwrap();
+        let mcp_flags: (bool, bool) = conn
+            .query_row(
+                "SELECT enabled_mcode, enabled_pi FROM mcp_servers WHERE id='shared-mcp'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        let skill_flag: bool = conn
+            .query_row(
+                "SELECT enabled_mcode FROM skills WHERE id='shared-skill'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(mcp_flags, (version >= 19, version == 20));
+        assert_eq!(skill_flag, version >= 19);
+        let meta: String = conn
+            .query_row(
+                "SELECT meta FROM providers WHERE id='upstream-provider'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta, "{\"keep\":true}");
+        assert_eq!(
+            conn.query_row("PRAGMA quick_check", [], |row| row.get::<_, String>(0))
+                .unwrap(),
+            "ok"
+        );
+    }
+}
+
+#[test]
 fn schema_migration_adds_missing_columns_for_providers() {
     let conn = Connection::open_in_memory().expect("open memory db");
 
