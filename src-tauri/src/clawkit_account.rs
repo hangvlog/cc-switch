@@ -8,6 +8,7 @@ use serde_json::{json, Value};
 
 mod identity;
 mod sso;
+mod password;
 mod renewal;
 mod system_user;
 pub(crate) mod transport;
@@ -17,11 +18,11 @@ use transport::{http_client_builder, post_json_with_direct_fallback};
 const DEFAULT_ACCOUNT_API_BASE: &str = "https://image.clawkit.chat";
 const DEFAULT_RELAY_API_BASE: &str = "https://clawkit.chat";
 const SESSION_FILE: &str = "clawkit-account.json";
-#[cfg(test)]
-const PRODUCT: &str = "codex-remote";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoredSession {
+    #[serde(default)]
+    password_login: bool,
     token: String,
     user: Value,
     device_id: String,
@@ -210,39 +211,6 @@ impl ClawkitAccountClient {
     }
 }
 
-#[cfg(test)]
-fn login_request(api_base: &str, login: &str, password: &str, device_id: &str) -> (String, Value) {
-    if is_mainland_phone(login) {
-        return (
-            format!("{api_base}/api/auth/phone/login"),
-            json!({
-                "phone": login,
-                "password": password,
-                "device_id": device_id,
-                "product": PRODUCT,
-            }),
-        );
-    }
-    (
-        format!("{api_base}/auth/login"),
-        json!({
-            "username": login,
-            "password": password,
-            "device_id": device_id,
-            "product": PRODUCT,
-        }),
-    )
-}
-
-#[cfg(test)]
-fn is_mainland_phone(value: &str) -> bool {
-    let bytes = value.as_bytes();
-    bytes.len() == 11
-        && bytes[0] == b'1'
-        && matches!(bytes[1], b'3'..=b'9')
-        && bytes.iter().all(u8::is_ascii_digit)
-}
-
 pub fn default_session_path() -> PathBuf {
     crate::config::get_home_dir()
         .join(".codex-session-delete")
@@ -327,7 +295,7 @@ fn restrict_session_permissions(_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        default_session_path, login_request, normalize_api_base, session_status,
+        default_session_path, normalize_api_base, session_status,
         socket_ticket_status, websocket_base, StoredSession,
     };
     use serde_json::json;
@@ -348,37 +316,9 @@ mod tests {
     }
 
     #[test]
-    fn phone_login_uses_phone_password_endpoint() {
-        let (endpoint, payload) = login_request(
-            "https://image.clawkit.chat",
-            "13812345678",
-            "secret-value",
-            "desktop-device",
-        );
-
-        assert_eq!(endpoint, "https://image.clawkit.chat/api/auth/phone/login");
-        assert_eq!(payload["phone"], "13812345678");
-        assert!(payload.get("username").is_none());
-        assert_eq!(payload["product"], "codex-remote");
-    }
-
-    #[test]
-    fn username_login_keeps_unified_login_endpoint() {
-        let (endpoint, payload) = login_request(
-            "https://image.clawkit.chat",
-            "alice@example.com",
-            "secret-value",
-            "desktop-device",
-        );
-
-        assert_eq!(endpoint, "https://image.clawkit.chat/auth/login");
-        assert_eq!(payload["username"], "alice@example.com");
-        assert!(payload.get("phone").is_none());
-    }
-
-    #[test]
     fn tauri_account_status_uses_camel_case_keys() {
         let status = session_status(&StoredSession {
+            password_login: false,
             token: "secret-value".into(),
             user: json!({ "username": "alice" }),
             device_id: "desktop-device".into(),

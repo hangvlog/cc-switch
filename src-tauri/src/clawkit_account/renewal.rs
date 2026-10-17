@@ -39,7 +39,7 @@ mod tests {
         let task=tokio::spawn(async move {axum::serve(listener,app).await.unwrap();});
         let dir=tempfile::tempdir().unwrap();
         let client=ClawkitAccountClient::with_endpoints(&base,&base,dir.path().join("session.json")).unwrap();
-        client.save_session(&StoredSession{token:"expired-access".into(),user:json!({"id":42,"sub":"42"}),device_id:"desktop-test".into(),
+        client.save_session(&StoredSession{password_login:false,token:"expired-access".into(),user:json!({"id":42,"sub":"42"}),device_id:"desktop-test".into(),
             expires_at:1,refresh_token:Some("durable-refresh".into()),refresh_expires_at:Some(unix_timestamp()+86400*30)}).unwrap();
         (client,dir,task)
     }
@@ -101,6 +101,7 @@ impl ClawkitAccountClient {
             return Err("登录续期账号不一致".into());
         }
         let next = StoredSession {
+            password_login: current.password_login,
             token: data["token"].as_str().filter(|v|!v.is_empty()).ok_or("续期令牌缺失")?.into(),
             user:data["user"].clone(), device_id:current.device_id.clone(),
             expires_at:unix_timestamp()+data["expires_in"].as_u64().filter(|v|*v>0 && *v<=86400).ok_or("续期时间无效")?,

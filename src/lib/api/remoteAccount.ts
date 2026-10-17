@@ -24,7 +24,8 @@ export interface RemoteSocketTicket {
 
 export const remoteAccountApi = {
   status: () => invoke<RemoteAccountStatus>("get_clawkit_account_status"),
-  login: () => invoke<RemoteAccountStatus>("login_clawkit_account"),
+  login: (username?: string, password?: string) =>
+    invoke<RemoteAccountStatus>("login_clawkit_account", { username, password }),
   logout: () => invoke<RemoteAccountStatus>("logout_clawkit_account"),
   createSocketTicket: () =>
     invoke<RemoteSocketTicket>("create_clawkit_socket_ticket"),

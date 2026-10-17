@@ -170,7 +170,7 @@ mod tests {
     fn expiry_and_logout_preserve_identity_without_destroying_refresh_credentials() {
         let dir=tempfile::tempdir().unwrap();let path=dir.path().join("clawkit-account.json");
         let client=ClawkitAccountClient::with_endpoints("https://example.com","https://example.com",&path).unwrap();
-        client.save_session(&StoredSession{token:"expired".into(),user:json!({"id":7}),device_id:"desktop-existing".into(),
+        client.save_session(&StoredSession{password_login:false,token:"expired".into(),user:json!({"id":7}),device_id:"desktop-existing".into(),
             expires_at:1,refresh_token:Some("refresh".into()),refresh_expires_at:Some(u64::MAX)}).unwrap();
         assert!(client.load_active_session().is_err());assert!(path.exists());
         assert_eq!(client.status()["authenticated"],true);

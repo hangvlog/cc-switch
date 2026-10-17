@@ -290,10 +290,15 @@ pub async fn get_clawkit_account_status() -> Value {
 #[tauri::command]
 pub async fn login_clawkit_account(
     app: AppHandle,
+    username: Option<String>,
+    password: Option<String>,
 ) -> Result<Value, String> {
-    let status = crate::clawkit_account::ClawkitAccountClient::default()
-        .login_sso(&app)
-        .await?;
+    let account = crate::clawkit_account::ClawkitAccountClient::default();
+    let status = match (username, password) {
+        (Some(username), Some(password)) => account.login_password(&username, &password).await?,
+        (None, None) => account.login_sso(&app).await?,
+        _ => return Err("请输入账号和密码".into()),
+    };
     crate::desktop_remote::restore(&app);
     Ok(status)
 }
@@ -302,10 +307,13 @@ pub async fn login_clawkit_account(
 pub async fn logout_clawkit_account(app: AppHandle) -> Result<Value, String> {
     use tauri_plugin_opener::OpenerExt;
     let account=crate::clawkit_account::ClawkitAccountClient::default();
+    let browser_login = account.uses_browser_login();
     account.revoke_session().await?;
     crate::desktop_remote::sign_out(&app)?;
     let status=account.logout()?;
-    app.opener().open_url(account.sso_logout_url(),None::<String>).map_err(|_| "已退出本机，但无法打开统一退出页面".to_string())?;
+    if browser_login {
+        app.opener().open_url(account.sso_logout_url(),None::<String>).map_err(|_| "已退出本机，但无法打开统一退出页面".to_string())?;
+    }
     Ok(status)
 }
 

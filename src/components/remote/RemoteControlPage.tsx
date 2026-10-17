@@ -24,7 +24,7 @@ import { settingsApi } from "@/lib/api/settings";
 export function RemoteControlPage() {
   const [account, setAccount] = useState<RemoteAccountStatus | null>(null);
   const [accountLoaded, setAccountLoaded] = useState(false);
-  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginBusy, setLoginBusy] = useState<"password" | "browser" | null>(null);
   const [configurationBusy, setConfigurationBusy] = useState(false);
   const [diagnosticBusy, setDiagnosticBusy] = useState(false);
   const [diagnosticUrl, setDiagnosticUrl] = useState<string | null>(null);
@@ -137,16 +137,16 @@ export function RemoteControlPage() {
     }
   };
 
-  const login = async () => {
-    setLoginBusy(true);
+  const login = async (username?: string, password?: string) => {
+    setLoginBusy(username === undefined ? "browser" : "password");
     try {
-      const session = await remoteAccountApi.login();
+      const session = await remoteAccountApi.login(username, password);
       setAccount(session);
       toast.success("登录成功，可启用手机远程");
     } catch (error) {
       toast.error(extractErrorMessage(error) || "登录失败");
     } finally {
-      setLoginBusy(false);
+      setLoginBusy(null);
     }
   };
 
@@ -183,7 +183,7 @@ export function RemoteControlPage() {
   if (!account) {
     return (
       <div className="mx-auto w-full max-w-3xl px-6 pb-8 pt-4">
-        <AccountLoginCard busy={loginBusy} onLogin={login} />
+        <AccountLoginCard busy={loginBusy} onLogin={login} onBrowserLogin={() => login()} />
       </div>
     );
   }
