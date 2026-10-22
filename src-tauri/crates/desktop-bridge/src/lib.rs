@@ -2,6 +2,7 @@
 //! Native creation shares the original initialized engine; no independent engine fallback.
 mod attachments;
 mod image_preview;
+mod image_storage;
 mod activity;
 mod activity_automations;
 mod catalog;

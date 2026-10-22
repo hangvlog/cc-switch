@@ -172,9 +172,7 @@ impl Attachments {
         let id=format!("{:x}",Sha256::digest(bytes));
         let target=self.0.join(&id);
         if target.exists() {return Ok(id);}
-        let used:u64=fs::read_dir(&self.0).map_err(|e|e.to_string())?.filter_map(Result::ok)
-            .filter_map(|e|e.metadata().ok()).map(|m|m.len()).sum();
-        if used+bytes.len() as u64>256*1024*1024 {return Err("图片缓存已满".into());}
+        crate::image_storage::ensure_capacity(&self.0, bytes.len() as u64)?;
         let temp=self.0.join(format!("{}.part",uuid::Uuid::new_v4()));
         let mut options=fs::OpenOptions::new();options.create_new(true).write(true);
         #[cfg(unix)] {use std::os::unix::fs::OpenOptionsExt;options.mode(0o600);}
@@ -218,15 +216,15 @@ impl Attachments {
                 return Err("上传编号已用于不同图片".into());
             }
         } else {
-            let used: u64 = fs::read_dir(&self.0)
-                .map_err(|e| e.to_string())?
-                .filter_map(Result::ok)
-                .filter_map(|e| e.metadata().ok())
-                .map(|m| m.len())
-                .sum();
-            if used + data.len() as u64 > 256 * 1024 * 1024 {
-                return Err("电脑图片缓存已满，请在电脑清理后重试".into());
-            }
+            // Reserve the final immutable copy as well as this chunk. The .part
+            // remains available for retrying a lost final acknowledgement.
+            let final_copy = if offset + data.len() == total {
+                let mut complete = bytes.clone();
+                complete.extend_from_slice(&data);
+                let id = format!("{:x}", Sha256::digest(&complete));
+                if self.0.join(id).exists() { 0 } else { total as u64 }
+            } else { 0 };
+            crate::image_storage::ensure_capacity(&self.0, data.len() as u64 + final_copy)?;
             let mut opts = fs::OpenOptions::new();
             opts.create(true).append(true);
             #[cfg(unix)]
@@ -250,6 +248,7 @@ impl Attachments {
         // Completed content is immutable. Keep the part for retries after a lost final reply.
         let target = self.0.join(&id);
         if !target.exists() {
+            crate::image_storage::ensure_capacity(&self.0, bytes.len() as u64)?;
             fs::copy(&file, target).map_err(|e| e.to_string())?;
         }
         Ok(json!({"offset":total,"imageId":id}))
@@ -282,6 +281,42 @@ impl Attachments {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn accumulated_history_does_not_block_new_uploads() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Attachments::open(root.path()).unwrap();
+        let history = root.path().join("images").join("a".repeat(64));
+        fs::File::create(&history).unwrap().set_len(256 * 1024 * 1024).unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\nabcdefghijklmnop";
+        let request = json!({"uploadId":uuid::Uuid::new_v4().to_string(),"offset":0,
+            "total":bytes.len(),"data":STANDARD.encode(bytes)});
+        let result = store.chunk(&request).unwrap();
+        assert_eq!(store.chunk(&request).unwrap(), result);
+        assert_eq!(store.read(&json!({"imageId":result["imageId"],"offset":0})).unwrap()["total"], bytes.len());
+        assert_eq!(fs::metadata(history).unwrap().len(), 256 * 1024 * 1024);
+    }
+
+    #[test]
+    fn configured_capacity_reserves_final_copy_and_can_be_raised_live() {
+        let root = tempfile::tempdir().unwrap();
+        let store = Attachments::open(root.path()).unwrap();
+        let history = root.path().join("images").join("a".repeat(64));
+        fs::File::create(&history).unwrap().set_len(256 * 1024 * 1024 - 32).unwrap();
+        let config = root.path().join("image-storage.json");
+        fs::write(&config, br#"{"maxStorageMiB":256}"#).unwrap();
+        let bytes = b"\x89PNG\r\n\x1a\nabcdefghijklmnop";
+        let request = json!({"uploadId":uuid::Uuid::new_v4().to_string(),"offset":0,
+            "total":bytes.len(),"data":STANDARD.encode(bytes)});
+        assert!(store.chunk(&request).unwrap_err().contains("256 MiB"));
+        assert_eq!(fs::read_dir(root.path().join("images")).unwrap().count(), 1);
+        fs::write(&config, br#"{"maxStorageMiB":2048}"#).unwrap();
+        let result = store.chunk(&request).unwrap();
+        assert_eq!(store.chunk(&request).unwrap(), result);
+        assert_eq!(fs::metadata(&history).unwrap().len(), 256 * 1024 * 1024 - 32);
+        fs::write(&config, br#"{"maxStorageMiB":0}"#).unwrap();
+        assert!(store.import_image(b"\x89PNG\r\n\x1a\n0123456789abcdef").is_err());
+    }
+
     #[test]
     fn upload_retry_scope_and_image_only() {
         let d = tempfile::tempdir().unwrap();
