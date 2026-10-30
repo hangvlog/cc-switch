@@ -205,7 +205,7 @@ fn schema_migration_sets_user_version_when_missing() {
 fn schema_migration_rejects_future_version() {
     let conn = Connection::open_in_memory().expect("open memory db");
     Database::create_tables_on_conn(&conn).expect("create tables");
-    Database::set_user_version(&conn, SCHEMA_VERSION + 1).expect("set future version");
+    Database::set_user_version(&conn, super::compatibility::MAX_COMPATIBLE_SCHEMA_VERSION + 1).expect("set future version");
 
     let err =
         Database::apply_schema_migrations_on_conn(&conn).expect_err("should reject higher version");
@@ -1174,4 +1174,89 @@ fn clawkit_directory_migration_materializes_internal_links_and_rejects_external_
     )
     .is_err());
     assert!(!home.path().join("blocked").exists());
+}
+
+
+#[test]
+fn schema_forward_compat_preserves_additive_versions_and_flags() {
+    for version in [21, 22, 23, 24] {
+        let file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(file.path()).unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        for (introduced, table, name) in [
+            (21, "mcp_servers", "enabled_agy"), (21, "skills", "enabled_agy"),
+            (22, "mcp_servers", "enabled_kimi"), (22, "skills", "enabled_kimi"),
+            (23, "mcp_servers", "enabled_omp"),
+            (24, "mcp_servers", "enabled_dsh"), (24, "skills", "enabled_dsh"),
+        ] {
+            if version >= introduced {
+                conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {name} BOOLEAN NOT NULL DEFAULT 0")).unwrap();
+            }
+        }
+        if version == 24 {
+            conn.execute_batch("ALTER TABLE session_log_sync ADD COLUMN parser_state TEXT;
+                INSERT INTO session_log_sync (file_path,last_modified,last_synced_at,parser_state)
+                VALUES ('synthetic',1,2,'preserve-parser');").unwrap();
+        }
+        conn.execute_batch("INSERT INTO mcp_servers(id,name,server_config,enabled_agy) VALUES ('m','M','{}',1);
+            INSERT INTO skills(id,name,directory,enabled_agy) VALUES ('s','S','synthetic',1);").unwrap();
+        Database::set_user_version(&conn, version).unwrap();
+        let changes: i64 = conn.query_row("SELECT total_changes()", [], |r| r.get(0)).unwrap();
+        assert_eq!(Database::stored_user_version_exceeds_supported(file.path()).unwrap(), None);
+        for _ in 0..2 {
+            Database::create_tables_on_conn(&conn).unwrap();
+            Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        }
+        assert_eq!(conn.query_row("SELECT total_changes()", [], |r| r.get::<_,i64>(0)).unwrap(), changes);
+        assert_eq!(Database::get_user_version(&conn).unwrap(), version);
+        let db = Database { conn: Mutex::new(conn) };
+        let mut server = db.get_all_mcp_servers().unwrap().shift_remove("m").unwrap();
+        server.name = "Edited".into(); db.save_mcp_server(&server).unwrap();
+        let mut skill = db.get_installed_skill("s").unwrap().unwrap();
+        skill.name = "Edited".into(); db.save_skill(&skill).unwrap();
+        let conn = db.conn.lock().unwrap();
+        for table in ["mcp_servers", "skills"] {
+            assert_eq!(conn.query_row(&format!("SELECT enabled_agy FROM {table}"), [], |r| r.get::<_,i32>(0)).unwrap(), 1);
+        }
+        if version == 24 {
+            crate::services::session_usage::update_sync_state_on_conn(&conn,"synthetic",3,4).unwrap();
+            assert_eq!(conn.query_row("SELECT parser_state FROM session_log_sync",[], |r|r.get::<_,String>(0)).unwrap(),"preserve-parser");
+        }
+        assert_eq!(conn.query_row("PRAGMA quick_check", [], |r| r.get::<_,String>(0)).unwrap(), "ok");
+    }
+}
+
+#[test]
+fn schema_forward_compat_rejects_conflicts_before_any_ddl() {
+    for mutation in [
+        "ALTER TABLE providers RENAME COLUMN settings_config TO incompatible_settings",
+        "ALTER TABLE settings ADD COLUMN unknown_field TEXT",
+        "CREATE TRIGGER unsafe_write AFTER UPDATE ON settings BEGIN DELETE FROM providers; END",
+        "PRAGMA user_version=25",
+    ] {
+        let file = NamedTempFile::new().unwrap();
+        let conn = Connection::open(file.path()).unwrap();
+        Database::create_tables_on_conn(&conn).unwrap();
+        Database::apply_schema_migrations_on_conn(&conn).unwrap();
+        Database::set_user_version(&conn, 23).unwrap();
+        conn.execute_batch(mutation).unwrap();
+        let schema_before: i32 = conn.query_row("PRAGMA schema_version",[],|r|r.get(0)).unwrap();
+        assert!(Database::stored_user_version_exceeds_supported(file.path()).unwrap().is_some());
+        assert!(Database::create_tables_on_conn(&conn).is_err());
+        assert!(Database::apply_schema_migrations_on_conn(&conn).is_err());
+        let schema_after: i32 = conn.query_row("PRAGMA schema_version",[],|r|r.get(0)).unwrap();
+        assert_eq!(schema_before, schema_after);
+    }
+}
+
+
+#[test]
+fn schema_forward_compat_readonly_snapshot() {
+    let Ok(path) = std::env::var("CLAWKIT_COMPAT_TEST_SNAPSHOT") else { return; };
+    let conn = Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+    assert!(Database::newer_schema_is_compatible(&conn).unwrap());
+    Database::create_tables_on_conn(&conn).unwrap();
+    Database::apply_schema_migrations_on_conn(&conn).unwrap();
+    assert_eq!(Database::stored_user_version_exceeds_supported(std::path::Path::new(&path)).unwrap(), None);
 }
