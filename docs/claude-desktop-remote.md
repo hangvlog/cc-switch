@@ -17,6 +17,9 @@ this computer and lets the phone continue them. Implementation:
 Only `user` and `assistant` content is projected to the phone. Other transcript
 records carry the system prompt and must not leave the computer. History follows
 the `parentUuid` chain from the latest record, the branch `--resume` continues.
+A record lost to a failed write (for example a full disk) leaves a dangling
+parent; the walk continues from the record written just before it, and
+compaction boundaries are crossed through `logicalParentUuid`.
 
 ## Turns
 

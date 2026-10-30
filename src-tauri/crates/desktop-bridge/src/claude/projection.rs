@@ -36,16 +36,23 @@ fn conversational(record: &Value) -> bool {
 
 /// The branch `--resume` continues. Two writers on one session leave the
 /// other branch orphaned; it must not be shown as part of the conversation.
+/// A record lost to a failed write leaves a dangling parent: continue from
+/// the record written just before it. Compaction boundaries link through
+/// `logicalParentUuid`.
 pub fn active_chain(records: &[Value]) -> Vec<&Value> {
-    let by_uuid: HashMap<&str, &Value> = records.iter().filter_map(|r| Some((r["uuid"].as_str()?, r))).collect();
+    let index: HashMap<&str, usize> = records.iter().enumerate().filter_map(|(i, r)| Some((r["uuid"].as_str()?, i))).collect();
     let mut chain = std::collections::HashSet::new();
-    let mut node = records.iter().rev().find(|r| conversational(r) && r["uuid"].is_string());
-    while let Some(record) = node {
-        let id = record["uuid"].as_str().unwrap_or_default();
-        if !chain.insert(id) {
+    let mut position = records.iter().rposition(|r| conversational(r) && r["uuid"].is_string());
+    while let Some(i) = position {
+        let record = &records[i];
+        if !chain.insert(record["uuid"].as_str().unwrap_or_default()) {
             break;
         }
-        node = record["parentUuid"].as_str().and_then(|p| by_uuid.get(p).copied());
+        position = match record["parentUuid"].as_str().or(record["logicalParentUuid"].as_str()) {
+            None => None,
+            Some(parent) => index.get(parent).copied()
+                .or_else(|| records[..i].iter().rposition(|r| r["uuid"].is_string() && r["isSidechain"] != true)),
+        };
     }
     records.iter().filter(|r| r["uuid"].as_str().is_some_and(|id| chain.contains(id))).collect()
 }
@@ -226,6 +233,24 @@ mod tests {
         assert_eq!(projection.turns.len(), 1);
         assert_eq!(projection.turns[0]["status"], "inProgress");
         assert_eq!(projection.turns[0]["items"][0]["content"][0]["text"], "two");
+    }
+
+    #[test]
+    fn bridges_lost_records_and_compaction_boundaries() {
+        let mut compact = rec("user", "c1", None, json!("summary of earlier work"));
+        compact["logicalParentUuid"] = json!("a1");
+        compact["isMeta"] = json!(true);
+        let records = vec![
+            rec("user", "u1", None, json!("before compaction")),
+            rec("assistant", "a1", Some("u1"), json!([{"type":"text","text":"ok"}])),
+            compact,
+            rec("user", "u2", Some("c1"), json!("after compaction")),
+            rec("assistant", "a2", Some("u2"), json!([{"type":"text","text":"ok2"}])),
+            rec("user", "u3", Some("lost-on-full-disk"), json!("after a failed write")),
+        ];
+        let projection = project(&records, 20, None);
+        assert_eq!(projection.total_turns, 3);
+        assert_eq!(projection.preview, "before compaction");
     }
 
     #[test]
