@@ -7,6 +7,7 @@ mod activity;
 mod activity_automations;
 mod catalog;
 mod catalog_reader;
+pub mod claude;
 pub use catalog_reader::CatalogReader;
 mod conditional_read;
 mod clarification;
@@ -84,6 +85,7 @@ pub struct Bridge {
     native_creations: native::creation::NativeCreations,
     queue: queue::Queue,
     attachments: attachments::Attachments,
+    claude: claude::Claude,
     enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -113,11 +115,14 @@ impl Bridge {
             queue: queue::Queue::open(queue_storage)?,
             attachments: attachments::Attachments::open(queue_storage)?,
             search: search::Search::open(queue_storage)?,
+            claude: claude::Claude::open(queue_storage),
             enabled,
         })
     }
 
     pub fn owner_streams(&self) -> owner_stream::OwnerStreams { self.owner_streams.clone() }
+
+    pub fn claude_events(&self) -> claude::ClaudeEvents { self.claude.events() }
 
     pub fn catalog_reader(&self) -> CatalogReader {
         CatalogReader::new(&self.home, self.enabled.clone())
@@ -173,7 +178,8 @@ impl Bridge {
             "initialize" => { let event_ready=native::event_ready(&self.home); let owner_ready=version::can_send(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
                 "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,"ownerStream":!event_ready&&owner_ready,
-                "taskFileRead":true,"imageRead":true,"imagePreview":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready||owner_ready,"approvals":event_ready||owner_ready}})) },
+                "taskFileRead":true,"imageRead":true,"imagePreview":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready||owner_ready,"approvals":event_ready||owner_ready,
+                "claudeDesktop":self.claude.capability()}})) },
             "desktop/events/read" => {
                 let mut batch=native::read_events(&self.home,params.clone())?;
                 self.project_events(&mut batch);Ok(batch)
@@ -305,6 +311,7 @@ impl Bridge {
                 }
                 self.ledger.read(id, thread)
             }
+            m if m.starts_with("claude/") => self.claude.dispatch(m, params),
             _ => Err("此操作不受原桌面接续支持".into()),
         }
     }

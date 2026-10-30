@@ -3,10 +3,10 @@ use serde_json::{json, Value};
 use std::{path::PathBuf, time::Duration};
 use tokio::sync::mpsc;
 
-pub async fn pump(owner: clawkit_desktop_bridge::owner_stream::OwnerStreams, home: PathBuf, storage: PathBuf, output: mpsc::Sender<Value>) {
+pub async fn pump(owner: clawkit_desktop_bridge::owner_stream::OwnerStreams, claude: clawkit_desktop_bridge::claude::ClaudeEvents, home: PathBuf, storage: PathBuf, output: mpsc::Sender<Value>) {
     let mut cursor = json!({});
     loop {
-        for event in owner.drain() { if output.send(event).await.is_err() {return;} }
+        for event in owner.drain().into_iter().chain(claude.drain()) { if output.send(event).await.is_err() {return;} }
         let home = home.clone();
         let params = cursor.clone();
         let storage = storage.clone();

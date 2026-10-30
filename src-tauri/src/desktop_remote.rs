@@ -184,7 +184,8 @@ async fn relay(
     // Stateful commands retain the original bridge mutex and receipt ordering.
     let catalog_slots = Arc::new(tokio::sync::Semaphore::new(2));
     let status_slots = Arc::new(tokio::sync::Semaphore::new(2));
-    let event_task = tauri::async_runtime::spawn(events::pump(bridge.lock().expect("bridge").owner_streams(), codex_home(), storage().join("accounts").join(expected_scope), responses.clone()));
+    let (owner_streams, claude_events) = { let bridge = bridge.lock().expect("bridge"); (bridge.owner_streams(), bridge.claude_events()) };
+    let event_task = tauri::async_runtime::spawn(events::pump(owner_streams, claude_events, codex_home(), storage().join("accounts").join(expected_scope), responses.clone()));
     struct Abort(tauri::async_runtime::JoinHandle<()>);
     impl Drop for Abort { fn drop(&mut self) { self.0.abort(); } }
     let _event_task = Abort(event_task);
