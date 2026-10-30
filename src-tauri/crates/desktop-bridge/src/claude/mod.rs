@@ -224,7 +224,7 @@ impl Claude {
             .or_else(|| sessions.iter().find(|s| s.cwd == cwd).and_then(|s| s.model.clone()));
         let cli_id = uuid::Uuid::new_v4().to_string();
         let launch = self.launch(cwd, ["--session-id", &cli_id], model.as_deref(), Some("acceptEdits"), None)?;
-        index::remember(&self.paths, &cli_id, cwd, &projection::clip(text, 60))?;
+        index::remember(&self.paths, &cli_id, cwd, &projection::truncate(text, 60))?;
         self.turns.start(&self.events, &cli_id, &format!("cli:{cli_id}"), id, text, launch)
     }
 }

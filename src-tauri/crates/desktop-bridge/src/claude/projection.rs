@@ -21,6 +21,19 @@ pub fn clip(text: &str, limit: usize) -> String {
     format!("{}\n…（已截断 {} 字节）", &text[..end], text.len() - end)
 }
 
+/// Short labels (titles, previews): cut on a char boundary with an ellipsis.
+pub fn truncate(text: &str, limit: usize) -> String {
+    let text = text.trim();
+    if text.len() <= limit {
+        return text.into();
+    }
+    let mut end = limit;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", text[..end].trim_end())
+}
+
 pub fn read_records(path: &Path) -> Result<Vec<Value>, String> {
     let size = fs::metadata(path).map_err(|_| "会话记录不可读")?.len();
     if size > MAX_TRANSCRIPT {
@@ -167,7 +180,7 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
                 turn["items"] = Value::Array(std::mem::take(&mut items));
             }
             if preview.is_empty() {
-                preview = clip(&user_text(&record["message"]["content"]).unwrap_or_default(), 160);
+                preview = truncate(&user_text(&record["message"]["content"]).unwrap_or_default(), 160);
             }
             turns.push(json!({"id":id,"status":"completed","items":[],"startedAt":seconds(&record["timestamp"])}));
         }
@@ -257,5 +270,6 @@ mod tests {
     fn clips_on_char_boundaries() {
         let text = "汉".repeat(5000);
         assert!(clip(&text, 10).starts_with("汉汉汉"));
+        assert_eq!(truncate("[测试] 生产中继验收", 15), "[测试] 生产…");
     }
 }
