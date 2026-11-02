@@ -21,6 +21,19 @@ A record lost to a failed write (for example a full disk) leaves a dangling
 parent; the walk continues from the record written just before it, and
 compaction boundaries are crossed through `logicalParentUuid`.
 
+## List layout
+
+The list mirrors the desktop sidebar (3.19.80):
+
+| Field | Source |
+| --- | --- |
+| `updatedAtMs` | later of `lastActivityAt` and the last `user`/`assistant` record's `timestamp`. Not the file mtime: the CLI appends untimestamped `last-prompt`/`mode`/`cost-state` records whenever a session is opened. |
+| `parentId` | `spawnedFrom.sessionId` (the session that opened it), unless `lineageDetached`; only when that session is listed |
+| `lineage` | `fork` (`spawnedFrom.userFork` or `forkedFromSessionId`), `side` (`spawnedFrom.sideSession`) |
+| `groupId` | `claude_desktop_config.json` → `preferences.epitaxyPrefs["dframe-group-scopes"][scope].assignments["code:<id>"]`, inherited from the parent chain |
+| `pinned` | `epitaxyPrefs["starred-local-code-sessions"]` |
+| `sections` (list) | `epitaxyPrefs["dframe-code-sections"][scope].sections`: pinned, manual groups and the ungrouped `sessions` section in `order`, hidden ones dropped |
+
 ## Turns
 
 Each phone message starts one CLI process:

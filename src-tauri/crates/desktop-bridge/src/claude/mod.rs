@@ -3,10 +3,12 @@
 //! runs one CLI turn on the gateway the desktop is configured with. A session
 //! whose CLI process is alive (open in the desktop) is read-only: two writers
 //! silently fork the conversation.
+mod activity;
 mod gateway;
 mod index;
 mod projection;
 mod runner;
+mod sidebar;
 #[cfg(all(test, unix))]
 mod tests;
 
@@ -159,9 +161,32 @@ impl Claude {
             cwds.retain(|c| seen.insert(c.clone()));
             cwds
         };
+        let layout = sidebar::read(self.paths.app_data.as_deref());
+        let known: std::collections::HashSet<&str> = sessions.iter().map(|s| s.id.as_str()).collect();
+        let parents: std::collections::HashMap<&str, &str> = sessions.iter()
+            .filter_map(|s| Some((s.id.as_str(), s.started_by.as_deref().filter(|p| *p != s.id && known.contains(p))?)))
+            .collect();
+        let group_of = |id: &str| {
+            let mut node = id;
+            for _ in 0..16 {
+                if let Some(group) = layout.assignments.get(node) {
+                    return Some(group.clone());
+                }
+                node = parents.get(node)?;
+            }
+            None
+        };
+        let data: Vec<Value> = sessions.iter().take(limit).map(|s| {
+            let mut summary = self.summary(s);
+            summary["parentId"] = json!(parents.get(s.id.as_str()));
+            summary["forkedFrom"] = json!(s.forked_from);
+            summary["lineage"] = json!(s.lineage);
+            summary["groupId"] = json!(group_of(&s.id));
+            summary["pinned"] = json!(layout.pinned.contains(&s.id));
+            summary
+        }).collect();
         Ok(json!({
-            "data":sessions.iter().take(limit).map(|s| self.summary(s)).collect::<Vec<_>>(),
-            "total":sessions.len(),"projects":projects,"capability":self.capability(),
+            "data":data,"total":sessions.len(),"projects":projects,"sections":layout.sections,"capability":self.capability(),
         }))
     }
 

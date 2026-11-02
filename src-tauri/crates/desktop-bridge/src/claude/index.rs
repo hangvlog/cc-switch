@@ -5,7 +5,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
 };
 
 const MAX_REGISTRY: usize = 200;
@@ -74,14 +73,19 @@ pub struct Session {
     pub permission_mode: Option<String>,
     pub cli_version: Option<String>,
     pub transcript: Option<PathBuf>,
-    pub transcript_at: u64,
+    pub message_at: u64,
     pub live: Option<Live>,
+    /// Session that opened this one (desktop nests it there), unless detached.
+    pub started_by: Option<String>,
+    pub forked_from: Option<String>,
+    /// `fork` for a user fork, `side` for a side session.
+    pub lineage: Option<&'static str>,
 }
 
 impl Session {
     /// Desktop metadata is not touched by phone turns; the transcript is.
     pub fn updated_at(&self) -> u64 {
-        self.activity_at.max(self.transcript_at)
+        self.activity_at.max(self.message_at)
     }
 }
 
@@ -91,15 +95,6 @@ pub fn is_uuid(value: &str) -> bool {
 
 pub fn encode_project(cwd: &str) -> String {
     cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
-}
-
-fn modified_ms(path: &Path) -> u64 {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
 }
 
 pub fn find_transcript(paths: &Paths, cli_id: &str, cwd: &str) -> Option<PathBuf> {
@@ -177,9 +172,20 @@ fn session_from(paths: &Paths, raw: &Value, live: &HashMap<String, Live>) -> Opt
     let id = raw["sessionId"].as_str()?.to_string();
     let cwd = raw["cwd"].as_str().or(raw["originCwd"].as_str()).unwrap_or("").to_string();
     let transcript = find_transcript(paths, &cli_id, &cwd);
+    let spawn = &raw["spawnedFrom"];
+    let id_of = |v: &Value| v.as_str().filter(|s| s.starts_with("local_")).map(String::from);
     Some(Session {
-        transcript_at: transcript.as_deref().map(modified_ms).unwrap_or(0),
+        message_at: transcript.as_deref().map(super::activity::last_message_ms).unwrap_or(0),
         transcript,
+        started_by: if raw["lineageDetached"] == true { None } else { id_of(&spawn["sessionId"]) },
+        forked_from: id_of(&raw["forkedFromSessionId"]),
+        lineage: if spawn["userFork"] == true || raw["forkedFromSessionId"].is_string() {
+            Some("fork")
+        } else if spawn["sideSession"] == true {
+            Some("side")
+        } else {
+            None
+        },
         live: live.get(&cli_id).cloned(),
         title: raw["title"].as_str().unwrap_or("").into(),
         created_at: raw["createdAt"].as_u64().unwrap_or(0),

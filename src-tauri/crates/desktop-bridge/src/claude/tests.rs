@@ -115,3 +115,37 @@ fn refuses_sessions_open_on_the_desktop_and_unknown_projects() {
     let create = f.claude.dispatch("claude/thread/create", &json!({"cwd":"/","requestId":uuid::Uuid::new_v4().to_string(),"text":"x"}));
     assert!(create.unwrap_err().contains("已有 Claude 会话"));
 }
+
+#[test]
+fn mirrors_desktop_sidebar_lineage_and_activity() {
+    let f = fixture();
+    let app = f.root.path().join("Claude-3p");
+    let fork_cli = "5f5c1525-2925-4ac6-bab8-a6236e198323";
+    let fork_id = "local_17cbf74d-d1ca-4546-afc8-7ccc6fbebfee";
+    let project = f.root.path().join("claude-home/projects").join(index::encode_project(&f.cwd));
+    fs::write(project.join(format!("{fork_cli}.jsonl")), format!("{}\n{}\n",
+        json!({"type":"user","uuid":"u1","parentUuid":null,"timestamp":"2026-11-02T03:00:00.000Z","message":{"role":"user","content":"fork"}}),
+        json!({"type":"last-prompt","lastPrompt":"fork"}))).unwrap();
+    fs::write(app.join(format!("claude-code-sessions/acct/org/{fork_id}.json")), json!({"sessionId":fork_id,"cliSessionId":fork_cli,
+        "cwd":f.cwd,"title":"测试会话 (fork)","createdAt":1u64,"lastActivityAt":2u64,"isArchived":false,
+        "forkedFromSessionId":LOCAL_ID,"spawnedFrom":{"sessionId":LOCAL_ID,"sideSession":true,"userFork":true}}).to_string()).unwrap();
+    fs::write(app.join("claude_desktop_config.json"), json!({"preferences":{"epitaxyPrefs":{
+        "dframe-group-scopes":{"acct/org":{"groups":[{"id":"cg-1","name":"项目"}],"assignments":{format!("code:{LOCAL_ID}"):"cg-1"}}},
+        "dframe-code-sections":{"acct/org":{"sections":[
+            {"id":"sessions","kind":"sessions","name":"","order":3},{"id":"pinned","kind":"pinned","name":"","order":0},
+            {"id":"routines","kind":"routines","name":"","order":1},{"id":"cg-1","kind":"manual","name":"项目","order":2,"collapsed":true},
+            {"id":"cg-2","kind":"manual","name":"隐藏","order":4,"shown":false}]}},
+        "starred-local-code-sessions":[LOCAL_ID]}}}).to_string()).unwrap();
+    let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
+    let ids: Vec<&str> = list["sections"].as_array().unwrap().iter().map(|s| s["id"].as_str().unwrap()).collect();
+    assert_eq!(ids, ["pinned", "cg-1", "sessions"]);
+    assert_eq!(list["sections"][1]["collapsed"], true);
+    let fork = list["data"].as_array().unwrap().iter().find(|t| t["id"] == fork_id).unwrap();
+    assert_eq!(fork["parentId"], LOCAL_ID);
+    assert_eq!(fork["lineage"], "fork");
+    assert_eq!(fork["groupId"], "cg-1");
+    assert_eq!(fork["updatedAtMs"], 1_793_588_400_000u64);
+    let parent = list["data"].as_array().unwrap().iter().find(|t| t["id"] == LOCAL_ID).unwrap();
+    assert_eq!(parent["pinned"], true);
+    assert_eq!(parent["parentId"], Value::Null);
+}
