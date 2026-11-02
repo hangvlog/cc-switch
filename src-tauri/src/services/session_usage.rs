@@ -691,10 +691,15 @@ fn update_claude_sync_state_on_conn(
         .unwrap_or(0);
 
     conn.prepare_cached(
-        "INSERT OR REPLACE INTO session_log_sync
+        "INSERT INTO session_log_sync
              (file_path, last_modified, last_line_offset, last_synced_at, last_byte_offset,
               last_tail_fingerprint)
-         VALUES (?1, ?2, 0, ?3, ?4, ?5)",
+         VALUES (?1, ?2, 0, ?3, ?4, ?5)
+         ON CONFLICT(file_path) DO UPDATE SET
+             last_modified=excluded.last_modified, last_line_offset=0,
+             last_synced_at=excluded.last_synced_at,
+             last_byte_offset=excluded.last_byte_offset,
+             last_tail_fingerprint=excluded.last_tail_fingerprint",
     )
     .and_then(|mut stmt| {
         stmt.execute(rusqlite::params![
@@ -764,8 +769,12 @@ pub(crate) fn update_sync_state_on_conn(
         .unwrap_or(0);
 
     conn.prepare_cached(
-        "INSERT OR REPLACE INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
-         VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO session_log_sync (file_path, last_modified, last_line_offset, last_synced_at)
+         VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT(file_path) DO UPDATE SET
+             last_modified=excluded.last_modified, last_line_offset=excluded.last_line_offset,
+             last_synced_at=excluded.last_synced_at,
+             last_byte_offset=NULL, last_tail_fingerprint=NULL",
     )
     .and_then(|mut stmt| stmt.execute(rusqlite::params![file_path, last_modified, last_offset, now]))
     .map_err(|e| AppError::Database(format!("更新同步状态失败: {e}")))?;

@@ -22,6 +22,10 @@ impl Database {
 
     /// 在指定连接上创建表（供迁移和测试使用）
     pub(crate) fn create_tables_on_conn(conn: &Connection) -> Result<(), AppError> {
+        // Skip legacy repair/DDL on a complete newer schema, including DROP paths.
+        if Self::get_user_version(conn)? > SCHEMA_VERSION {
+            return Self::check_newer_schema(conn);
+        }
         // 1. Providers 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS providers (
@@ -444,18 +448,13 @@ impl Database {
 
     /// 在指定连接上应用 Schema 迁移
     pub(crate) fn apply_schema_migrations_on_conn(conn: &Connection) -> Result<(), AppError> {
+        if Self::get_user_version(conn)? > SCHEMA_VERSION {
+            return Self::check_newer_schema(conn);
+        }
         conn.execute("SAVEPOINT schema_migration;", [])
             .map_err(|e| AppError::Database(format!("开启迁移 savepoint 失败: {e}")))?;
 
         let mut version = Self::get_user_version(conn)?;
-
-        if version > SCHEMA_VERSION {
-            conn.execute("ROLLBACK TO schema_migration;", []).ok();
-            conn.execute("RELEASE schema_migration;", []).ok();
-            return Err(AppError::Database(format!(
-                "数据库版本过新（{version}），当前应用仅支持 {SCHEMA_VERSION}，请升级应用后再尝试。"
-            )));
-        }
 
         let result = (|| {
             while version < SCHEMA_VERSION {
@@ -3140,6 +3139,10 @@ impl Database {
     }
 
     pub(crate) fn ensure_model_pricing_seeded_on_conn(conn: &Connection) -> Result<(), AppError> {
+        // A newer client owns these seeded prices. Do not replay older price repairs.
+        if Self::get_user_version(conn)? > SCHEMA_VERSION {
+            return Self::check_newer_schema(conn);
+        }
         // 每次启动都执行 INSERT OR IGNORE，增量追加新模型；仅修复仍等于旧内置值的定价。
         Self::seed_model_pricing(conn)?;
         Self::repair_current_model_pricing(conn)

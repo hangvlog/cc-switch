@@ -24,6 +24,7 @@
 //! ```
 
 pub(crate) mod backup;
+mod compatibility;
 mod dao;
 mod migration;
 mod schema;
@@ -165,8 +166,7 @@ impl Database {
         Ok(db)
     }
 
-    /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]
-    /// 更新时返回 `Some(version)`。
+    /// 只读检查磁盘数据库；较新的已审计兼容结构不阻断启动。
     ///
     /// 用于初始化失败后判断是否为「数据库版本过新（应用过旧，需升级应用）」的可恢复
     /// 场景——此时不应反复弹出无效的重试对话框，而应引导用户在应用内升级。
@@ -176,9 +176,10 @@ impl Database {
         if !db_path.exists() {
             return Ok(None);
         }
-        let conn = Connection::open(db_path).map_err(|e| AppError::Database(e.to_string()))?;
+        let conn = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| AppError::Database(e.to_string()))?;
         let version = Self::get_user_version(&conn)?;
-        Ok((version > SCHEMA_VERSION).then_some(version))
+        Ok((version > SCHEMA_VERSION && !Self::newer_schema_is_compatible(&conn)?).then_some(version))
     }
 
     /// 创建内存数据库（用于测试）
