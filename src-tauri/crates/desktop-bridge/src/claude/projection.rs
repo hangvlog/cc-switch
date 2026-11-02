@@ -70,20 +70,41 @@ pub fn active_chain(records: &[Value]) -> Vec<&Value> {
     records.iter().filter(|r| r["uuid"].as_str().is_some_and(|id| chain.contains(id))).collect()
 }
 
-fn user_text(content: &Value) -> Option<String> {
+/// A block the app wraps in tags (`<system-reminder>…`, `<task-notification>…`,
+/// `<command-name>…`) is context the desktop added, not what you typed; it can
+/// carry CLAUDE.md and must not reach the phone.
+fn injected(text: &str) -> bool {
+    let text = text.trim();
+    let Some(rest) = text.strip_prefix('<') else { return false };
+    let Some(end) = rest.find('>') else { return false };
+    let tag = &rest[..end];
+    !tag.is_empty()
+        && tag.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && text.ends_with('>')
+        && text.contains(&format!("</{tag}>"))
+}
+
+fn typed(text: &str) -> bool {
+    !injected(text) && !text.trim_start().starts_with("[Request interrupted by user")
+}
+
+pub fn user_text(content: &Value) -> Option<String> {
     if let Some(text) = content.as_str() {
-        return Some(text.into());
+        return typed(text).then(|| text.into());
     }
     let blocks = content.as_array()?;
     if blocks.iter().any(|b| b["type"] == "tool_result") {
         return None;
     }
-    let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).collect();
+    let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).filter(|t| typed(t)).collect();
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
+/// A message you sent: from the desktop composer (`origin.kind == "human"`) or
+/// a phone/CLI turn (no origin). Task notifications and summaries are not.
 pub fn starts_turn(record: &Value) -> bool {
-    record["type"] == "user" && record["isMeta"] != true && record["isSidechain"] != true
+    record["type"] == "user" && record["isMeta"] != true && record["isSidechain"] != true && record["isCompactSummary"] != true
+        && (record["origin"].is_null() || record["origin"]["kind"] == "human")
         && user_text(&record["message"]["content"]).is_some()
 }
 
@@ -188,6 +209,10 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
             continue;
         }
         let role = record["message"]["role"].as_str().unwrap_or(record["type"].as_str().unwrap_or(""));
+        // Only tool results ride on user records that do not start a turn.
+        if role == "user" && !starts_turn(record) && !record["message"]["content"].as_array().is_some_and(|b| b.iter().any(|b| b["type"] == "tool_result")) {
+            continue;
+        }
         apply_message(&mut items, id, role, &record["message"]["content"]);
         turns.last_mut().unwrap()["completedAt"] = json!(seconds(&record["timestamp"]));
     }
@@ -264,6 +289,23 @@ mod tests {
         let projection = project(&records, 20, None);
         assert_eq!(projection.total_turns, 3);
         assert_eq!(projection.preview, "before compaction");
+    }
+
+    #[test]
+    fn hides_injected_context_and_app_messages() {
+        let mut notice = rec("user", "n1", Some("a1"), json!("<task-notification><task-id>x</task-id></task-notification>"));
+        notice["origin"] = json!({"kind":"task-notification"});
+        let mut meta = rec("user", "m1", Some("n1"), json!("Base directory for this skill: /secret"));
+        meta["isMeta"] = json!(true);
+        let mut human = rec("user", "u1", None, json!([{"type":"text","text":"<system-reminder>\n# claudeMd\nsecret rules\n</system-reminder>"},{"type":"text","text":"真正的问题"}]));
+        human["origin"] = json!({"kind":"human"});
+        let records = vec![human, rec("assistant", "a1", Some("u1"), json!([{"type":"text","text":"答复"}])), notice, meta,
+            rec("user", "i1", Some("m1"), json!([{"type":"text","text":"[Request interrupted by user]"}]))];
+        let projection = project(&records, 20, None);
+        assert_eq!(projection.total_turns, 1);
+        assert_eq!(projection.preview, "真正的问题");
+        let shown = serde_json::to_string(&projection.turns).unwrap();
+        assert!(!shown.contains("secret") && !shown.contains("task-id") && !shown.contains("interrupted"), "{shown}");
     }
 
     #[test]

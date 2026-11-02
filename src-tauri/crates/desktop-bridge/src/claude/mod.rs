@@ -8,6 +8,7 @@ mod gateway;
 mod index;
 mod projection;
 mod runner;
+mod search;
 mod sidebar;
 #[cfg(all(test, unix))]
 mod tests;
@@ -44,6 +45,7 @@ pub struct Claude {
     paths: Paths,
     events: ClaudeEvents,
     turns: runner::Turns,
+    search: search::Search,
 }
 
 fn request_id(params: &Value) -> Result<&str, String> {
@@ -78,7 +80,7 @@ impl Claude {
     }
 
     pub fn with_paths(paths: Paths) -> Self {
-        Self { paths, events: ClaudeEvents::default(), turns: runner::Turns::default() }
+        Self { paths, events: ClaudeEvents::default(), turns: runner::Turns::default(), search: search::Search::default() }
     }
 
     pub fn events(&self) -> ClaudeEvents {
@@ -105,6 +107,7 @@ impl Claude {
         match method {
             "claude/status" => Ok(self.capability()),
             "claude/thread/list" => self.list(params),
+            "claude/thread/search" => self.find(params),
             "claude/thread/read" => self.read(params),
             "claude/thread/create" => self.create(params),
             "claude/turn/start" => self.start(params),
@@ -147,6 +150,7 @@ impl Claude {
                 "activeTurnId":running.as_ref().map(|r| r.turn_id.clone()),
                 "approvals":running.as_ref().map(|r| r.approvals()).unwrap_or_default(),
                 "model":session.model,
+                "turnEndedAt":session.turn_ended_at,"focusedAt":session.focused_at,"waitingOnDesktop":session.waiting,
             }
         })
     }
@@ -188,6 +192,21 @@ impl Claude {
         Ok(json!({
             "data":data,"total":sessions.len(),"projects":projects,"sections":layout.sections,"capability":self.capability(),
         }))
+    }
+
+    fn find(&self, params: &Value) -> Result<Value, String> {
+        let sessions = index::sessions(&self.paths, false);
+        let files: Vec<(String, PathBuf)> = sessions.iter().filter_map(|s| Some((s.id.clone(), s.transcript.clone()?))).collect();
+        let (mut hits, unavailable) = self.search.find(&files, params["query"].as_str().unwrap_or(""))?;
+        let mut data: Vec<Value> = sessions.iter().filter_map(|s| {
+            let hit = hits.remove(&s.id)?;
+            let mut summary = self.summary(s);
+            summary["searchMatch"] = json!({"snippet":hit.snippet,"historyCursor":""});
+            Some(summary)
+        }).collect();
+        let total = data.len();
+        data.truncate(100);
+        Ok(json!({"data":data,"total":total,"indexing":false,"indexedThreads":files.len() - unavailable,"totalThreads":files.len(),"unavailableThreads":unavailable}))
     }
 
     fn read(&self, params: &Value) -> Result<Value, String> {

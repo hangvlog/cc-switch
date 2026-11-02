@@ -32,7 +32,26 @@ The list mirrors the desktop sidebar (3.19.80; first released together with data
 | `lineage` | `fork` (`spawnedFrom.userFork` or `forkedFromSessionId`), `side` (`spawnedFrom.sideSession`) |
 | `groupId` | `claude_desktop_config.json` → `preferences.epitaxyPrefs["dframe-group-scopes"][scope].assignments["code:<id>"]`, inherited from the parent chain |
 | `pinned` | `epitaxyPrefs["starred-local-code-sessions"]` |
+| `desktop.turnEndedAt` / `desktop.focusedAt` | `lastTurnEdgeAt` / `lastFocusedAt`; the phone marks a session unread when a turn ended after you last looked (3.19.82) |
+| `desktop.waitingOnDesktop` | an entry naming the session in `claude-code-sessions/<account>/<org>/waiting-input/` |
 | `sections` (list) | `epitaxyPrefs["dframe-code-sections"][scope].sections`: pinned, manual groups and the ungrouped `sessions` section in `order`, hidden ones dropped |
+
+## Search (3.19.82)
+
+`claude/thread/search {query}` matches every whitespace-separated term in one
+message you sent and returns the newest match per session as `searchMatch`.
+Each transcript is parsed once and then read from its last offset; a line
+without its newline yet waits for the next search.
+
+## What counts as your message
+
+A turn starts at a `user` record that is not `isMeta`, `isSidechain` or
+`isCompactSummary`, whose `origin.kind` is `human` (desktop composer) or absent
+(phone/CLI turn), and that has text left after dropping blocks the app wraps in
+tags (`<system-reminder>`, `<task-notification>`, `<command-name>`…) and the
+`[Request interrupted by user]` marker. Those blocks carry CLAUDE.md and
+session status and are never projected. Other user records only contribute
+tool results.
 
 ## Turns
 

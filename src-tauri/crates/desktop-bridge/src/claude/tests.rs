@@ -149,3 +149,23 @@ fn mirrors_desktop_sidebar_lineage_and_activity() {
     assert_eq!(parent["pinned"], true);
     assert_eq!(parent["parentId"], Value::Null);
 }
+
+#[test]
+fn reports_unread_waiting_and_searches_sent_messages() {
+    let f = fixture();
+    let app = f.root.path().join("Claude-3p");
+    let record = app.join(format!("claude-code-sessions/acct/org/{LOCAL_ID}.json"));
+    let mut raw: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
+    raw["lastTurnEdgeAt"] = json!(2_000u64);
+    raw["lastFocusedAt"] = json!(1_000u64);
+    fs::write(&record, raw.to_string()).unwrap();
+    fs::create_dir_all(app.join("claude-code-sessions/acct/org/waiting-input")).unwrap();
+    fs::write(app.join(format!("claude-code-sessions/acct/org/waiting-input/{LOCAL_ID}.json")), "{}").unwrap();
+    let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
+    let desktop = &list["data"][0]["desktop"];
+    assert_eq!((desktop["turnEndedAt"].as_u64(), desktop["focusedAt"].as_u64(), desktop["waitingOnDesktop"].as_bool()), (Some(2_000), Some(1_000), Some(true)));
+    let found = f.claude.dispatch("claude/thread/search", &json!({"query":"HELLO"})).unwrap();
+    assert_eq!(found["data"][0]["id"], LOCAL_ID);
+    assert_eq!(found["data"][0]["searchMatch"]["snippet"], "hello");
+    assert_eq!(f.claude.dispatch("claude/thread/search", &json!({"query":"hi"})).unwrap()["total"], 0);
+}

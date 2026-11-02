@@ -63,7 +63,7 @@ fn line(reader: &mut impl BufRead, out: &mut Vec<u8>) -> Result<(usize, bool), S
     }
 }
 
-fn snippet(text: &str, term: &str) -> String {
+pub(crate) fn snippet(text: &str, term: &str) -> String {
     let lower = text.to_lowercase();
     let offset = lower
         .find(term)

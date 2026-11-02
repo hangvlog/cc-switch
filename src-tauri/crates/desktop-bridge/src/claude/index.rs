@@ -80,6 +80,9 @@ pub struct Session {
     pub forked_from: Option<String>,
     /// `fork` for a user fork, `side` for a side session.
     pub lineage: Option<&'static str>,
+    pub turn_ended_at: u64,
+    pub focused_at: u64,
+    pub waiting: bool,
 }
 
 impl Session {
@@ -148,6 +151,20 @@ pub fn live_processes(paths: &Paths) -> HashMap<String, Live> {
     live
 }
 
+/// Entries the desktop keeps in `waiting-input/` while a session waits for you.
+fn waiting_entries(paths: &Paths) -> Vec<String> {
+    let Some(base) = paths.app_data.as_ref().map(|p| p.join("claude-code-sessions")) else { return vec![] };
+    let mut names = Vec::new();
+    for account in fs::read_dir(base).into_iter().flatten().flatten() {
+        for org in fs::read_dir(account.path()).into_iter().flatten().flatten() {
+            for entry in fs::read_dir(org.path().join("waiting-input")).into_iter().flatten().flatten() {
+                names.push(entry.file_name().to_string_lossy().into_owned());
+            }
+        }
+    }
+    names
+}
+
 fn desktop_records(paths: &Paths) -> Vec<Value> {
     let Some(base) = paths.app_data.as_ref().map(|p| p.join("claude-code-sessions")) else { return vec![] };
     let mut records = Vec::new();
@@ -194,6 +211,9 @@ fn session_from(paths: &Paths, raw: &Value, live: &HashMap<String, Live>) -> Opt
         model: raw["model"].as_str().map(Into::into),
         permission_mode: raw["permissionMode"].as_str().map(Into::into),
         cli_version: raw["cliBinaryPin"]["version"].as_str().map(Into::into),
+        turn_ended_at: raw["lastTurnEdgeAt"].as_u64().unwrap_or(0),
+        focused_at: raw["lastFocusedAt"].as_u64().unwrap_or(0),
+        waiting: false,
         id,
         cli_id,
         cwd,
@@ -239,6 +259,11 @@ pub fn sessions(paths: &Paths, include_archived: bool) -> Vec<Session> {
     }
     if !include_archived {
         list.retain(|s| !s.archived);
+    }
+    let waiting = waiting_entries(paths);
+    for session in &mut list {
+        let uuid = session.id.trim_start_matches("local_");
+        session.waiting = waiting.iter().any(|name| name.contains(uuid));
     }
     list.sort_by(|a, b| b.updated_at().cmp(&a.updated_at()).then_with(|| a.id.cmp(&b.id)));
     list
