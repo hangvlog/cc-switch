@@ -23,7 +23,7 @@ compaction boundaries are crossed through `logicalParentUuid`.
 
 ## List layout
 
-The list mirrors the desktop sidebar (3.19.80):
+The list mirrors the desktop sidebar (3.19.80; first released together with database forward compatibility as 3.19.81):
 
 | Field | Source |
 | --- | --- |
