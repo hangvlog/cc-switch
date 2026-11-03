@@ -4248,6 +4248,7 @@
     "authNeedsReauth": "有账号需要重新登录",
     "prompts": "提示词",
     "sessions": "会话",
+    "remote": "手机远控",
     "apps": "应用",
     "appsTitle": "应用：安装、升级、在侧栏显示哪些",
     "appsHasUpdate": "应用 · 有可用更新",

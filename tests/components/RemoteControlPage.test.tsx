@@ -78,8 +78,8 @@ import {
 } from "@/components/remote/CodexEndpointSelector";
 
 async function login() {
-  await userEvent.click(await screen.findByRole("button", { name: "使用统一账号登录" }));
-  await waitFor(() => expect(mocks.accountLogin).toHaveBeenCalledWith());
+  await userEvent.click(await screen.findByRole("button", { name: "使用浏览器登录" }));
+  await waitFor(() => expect(mocks.accountLogin).toHaveBeenCalledTimes(1));
 }
 
 
@@ -167,7 +167,7 @@ describe("RemoteControlPage", () => {
   it("logs in without rewriting Codex configuration or launching a bridge", async () => {
     render(<RemoteControlPage />);
     await login();
-    expect(mocks.accountLogin).toHaveBeenCalledWith();
+    expect(mocks.accountLogin).toHaveBeenCalledWith(undefined, undefined);
     expect(mocks.configure).not.toHaveBeenCalled();
     expect(mocks.modelOptions).not.toHaveBeenCalled();
     expect(mocks.enableOwner).not.toHaveBeenCalled();

@@ -4248,6 +4248,7 @@
     "authNeedsReauth": "再ログインが必要なアカウントがあります",
     "prompts": "プロンプト",
     "sessions": "セッション",
+    "remote": "スマホ遠隔操作",
     "apps": "アプリ",
     "appsTitle": "アプリ：インストール、アップグレード、サイドバーに表示するもの",
     "appsHasUpdate": "アプリ · 更新があります",

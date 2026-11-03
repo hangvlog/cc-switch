@@ -11,7 +11,7 @@ use std::time::SystemTime;
 use serde::Serialize;
 
 use crate::codex_history_migration;
-use crate::config::{get_app_config_dir, get_home_dir};
+use crate::config::get_app_config_dir;
 use crate::database::Database;
 use crate::error::AppError;
 use crate::live::engine::DeviceStore;

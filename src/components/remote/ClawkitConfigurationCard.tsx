@@ -112,7 +112,7 @@ export function ClawkitConfigurationCard({
             <div>
               <div className="text-sm font-medium">同步到 Codex 配置列表</div>
               <div className="text-xs text-muted-foreground">
-                配置后可在 CC Switch 的 Codex 供应商列表中查看 ClawKit API。
+                配置后可在 Codex 供应商列表中查看 ClawKit API。
                 保留 auth.json、MCP、 Skills，不修改 Codex
                 应用、名称、图标或快捷方式。
               </div>

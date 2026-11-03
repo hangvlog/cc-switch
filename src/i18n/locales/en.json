@@ -4248,6 +4248,7 @@
     "authNeedsReauth": "An account needs to sign in again",
     "prompts": "Prompts",
     "sessions": "Sessions",
+    "remote": "Phone Remote",
     "apps": "Apps",
     "appsTitle": "Apps: install, upgrade, choose which show in the sidebar",
     "appsHasUpdate": "Apps · updates available",
