@@ -20,7 +20,11 @@ pub(super) struct BackupCcSwitchState {
     previous_local_current: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous_db_current: Option<String>,
+    /// 配置前 Codex 处于路由或聚合模式（字段名沿用旧版备份清单）
     previous_takeover_enabled: bool,
+    /// 配置前是聚合模式；旧版备份没有此字段，按路由模式恢复
+    #[serde(default)]
+    previous_stack_mode: bool,
 }
 
 pub async fn apply(
@@ -32,15 +36,14 @@ pub async fn apply(
     let app_type = AppType::Codex;
     // One-click setup and CC Switch both own the same Live config.toml. Keep
     // the provider switch lock until Live + provider state agree.
-    let switch_guard = state
-        .proxy_service
-        .lock_switch_for_app(app_type.as_str())
-        .await;
+    let switch_guard = crate::mode::controller::lock_settled(state, &app_type)
+        .await
+        .map_err(|error| error.to_string())?;
     let home = crate::codex_config::get_codex_config_dir();
-    let previous_state = capture_cc_switch_state(state, &app_type).await?;
+    let previous_state = capture_cc_switch_state(state, &app_type)?;
 
     if previous_state.previous_takeover_enabled {
-        if let Err(error) = state.proxy_service.disable_takeover_for_app_sync(&app_type) {
+        if let Err(error) = crate::mode::controller::exit_locked(state, &app_type, false) {
             drop(switch_guard);
             let restore_error = restore_takeover_if_needed(state, &previous_state)
                 .await
@@ -129,20 +132,15 @@ pub async fn apply(
 
 pub async fn rollback(state: &AppState) -> Result<ClawkitCodexConfigurationStatus, String> {
     let app_type = AppType::Codex;
-    let switch_guard = state
-        .proxy_service
-        .lock_switch_for_app(app_type.as_str())
-        .await;
+    let switch_guard = crate::mode::controller::lock_settled(state, &app_type)
+        .await
+        .map_err(|error| error.to_string())?;
     let home = crate::codex_config::get_codex_config_dir();
     let backup_dir =
         latest_backup_dir(&home).ok_or_else(|| "没有可恢复的 Codex 配置备份".to_string())?;
     let manifest = read_backup_manifest(&backup_dir)?;
     restore_backup_files(&home, &backup_dir)?;
 
-    let previous_takeover_enabled = manifest
-        .cc_switch_state
-        .as_ref()
-        .is_some_and(|previous| previous.previous_takeover_enabled);
     if let Some(previous) = manifest.cc_switch_state.as_ref() {
         let state_errors = restore_cc_switch_state(state, &app_type, previous);
         if !state_errors.is_empty() {
@@ -151,22 +149,19 @@ pub async fn rollback(state: &AppState) -> Result<ClawkitCodexConfigurationStatu
     }
 
     drop(switch_guard);
-    if previous_takeover_enabled {
-        state
-            .proxy_service
-            .set_takeover_for_app(app_type.as_str(), true)
-            .await
-            .map_err(|error| format!("恢复 Codex 代理接管失败：{error}"))?;
+    if let Some(previous) = manifest.cc_switch_state.as_ref() {
+        restore_takeover_if_needed(state, previous).await?;
     }
 
     remove_backup_dir(&backup_dir)?;
     Ok(status_from_home(&home))
 }
 
-async fn capture_cc_switch_state(
+fn capture_cc_switch_state(
     state: &AppState,
     app_type: &AppType,
 ) -> Result<BackupCcSwitchState, String> {
+    let mode = crate::mode::controller::app_mode_view(state, app_type)?;
     Ok(BackupCcSwitchState {
         previous_clawkit_provider: state
             .db
@@ -177,12 +172,8 @@ async fn capture_cc_switch_state(
             .db
             .get_current_provider(app_type.as_str())
             .map_err(|error| error.to_string())?,
-        previous_takeover_enabled: state
-            .db
-            .get_proxy_config_for_app(app_type.as_str())
-            .await
-            .map_err(|error| error.to_string())?
-            .enabled,
+        previous_takeover_enabled: mode.mode != "direct",
+        previous_stack_mode: mode.mode == "stack",
     })
 }
 
@@ -223,11 +214,9 @@ async fn restore_takeover_if_needed(
     previous: &BackupCcSwitchState,
 ) -> Result<(), String> {
     if previous.previous_takeover_enabled {
-        state
-            .proxy_service
-            .set_takeover_for_app(AppType::Codex.as_str(), true)
+        crate::mode::controller::enter(state, &AppType::Codex, previous.previous_stack_mode)
             .await
-            .map_err(|error| format!("恢复 Codex 代理接管失败：{error}"))?;
+            .map_err(|error| format!("恢复 Codex 路由模式失败：{error}"))?;
     }
     Ok(())
 }

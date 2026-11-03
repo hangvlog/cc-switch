@@ -898,7 +898,11 @@ pub async fn exit_apps_in_mode(state: &AppState, stack: bool) -> Result<Vec<Stri
 }
 
 /// `keep_mode` 为真是分离（退出 CC Switch）：模式和路由不变，只把客户端指回直连。
-fn exit_locked(state: &AppState, app: &AppType, keep_mode: bool) -> Result<(), String> {
+pub(crate) fn exit_locked(
+    state: &AppState,
+    app: &AppType,
+    keep_mode: bool,
+) -> Result<(), String> {
     let mode = current::mode_state(app);
     if keep_mode && !mode.attached {
         return Ok(());
@@ -1718,7 +1722,11 @@ async fn startup_app(state: &AppState, app: &AppType) -> Result<(), String> {
     let had_backup = drain_legacy_backup(state, app).await;
     let mut mode = current::mode_state(app);
     // 新版自己接上时写的占位符不算遗留物（比如重启更新时没来得及分离）。
-    let placeholder = !mode.attached && state.proxy_service.live_has_proxy_placeholder(app);
+    // ClawKit 可能和 CC Switch 装在同一台机器上：没有自己的旧版接管备份、而代理端口正被
+    // 别的进程监听时，占位符是 CC Switch 接上时写的，不当作遗留物。
+    let placeholder = !mode.attached
+        && state.proxy_service.live_has_proxy_placeholder(app)
+        && (had_backup || !proxy_port_owned_elsewhere(state).await);
     let legacy = had_backup || placeholder;
     let enabled = if *app == AppType::ClaudeDesktop {
         // 旧版按卡片决定 Desktop 走不走路由：直连指针是模型映射卡就是在用路由。只在第一次
@@ -1744,6 +1752,21 @@ async fn startup_app(state: &AppState, app: &AppType) -> Result<(), String> {
     if placeholder {
         // 旧版留下的接管态：客户端里是旧契约。按「已接上」处理，下面的投影会整体换掉它。
         mode.attached = true;
+    }
+
+    if mode.mode.is_none() && !legacy && !want_proxy {
+        // 第一次在本机落定模式且没有自己的遗留物：只记直连，不改写客户端文件，
+        // 它们可能正由同机的 CC Switch 管理。
+        return commit_state(
+            state,
+            app,
+            &PendingTarget::mode(ModeState {
+                mode: Some(Mode::Direct),
+                attached: false,
+                proxy_route: mode.proxy_route,
+                contract: None,
+            }),
+        );
     }
 
     if want_proxy {
@@ -1803,6 +1826,33 @@ async fn startup_app(state: &AppState, app: &AppType) -> Result<(), String> {
         )?;
     }
     Ok(())
+}
+
+/// 本应用的代理没运行，配置的代理端口却有进程在监听（同机的 CC Switch 路由服务）。
+async fn proxy_port_owned_elsewhere(state: &AppState) -> bool {
+    if state.proxy_service.is_running().await {
+        return false;
+    }
+    let Ok(config) = state.db.get_proxy_config().await else {
+        return false;
+    };
+    if config.listen_port == 0 {
+        return false;
+    }
+    let host = match config.listen_address.as_str() {
+        "0.0.0.0" | "" => "127.0.0.1",
+        "::" => "::1",
+        other => other,
+    };
+    use std::net::ToSocketAddrs;
+    (host, config.listen_port)
+        .to_socket_addrs()
+        .ok()
+        .and_then(|mut addresses| addresses.next())
+        .is_some_and(|address| {
+            std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_millis(300))
+                .is_ok()
+        })
 }
 
 /// 旧版的 Desktop 映射卡拆成新版的三样：旧版给映射卡写的一律是本地路由地址，所以客户端
@@ -3239,7 +3289,7 @@ mod mode_tests {
                 state.db.get_live_backup("claude").await.unwrap().is_none(),
                 "the old version would replay a leftover backup row after a downgrade"
             );
-            let drained = home.dir.path().join(".cc-switch/backups/proxy-live-backup");
+            let drained = home.dir.path().join(".clawkit/backups/proxy-live-backup");
             assert_eq!(
                 fs::read_dir(&drained).unwrap().count(),
                 1,
@@ -3260,6 +3310,42 @@ mod mode_tests {
                 assert!(!state.proxy_service.is_running().await);
             }
         }
+    }
+
+    /// 同机的 CC Switch 开着路由服务、客户端里是它写的占位符：ClawKit 第一次启动没有自己的
+    /// 接管备份，只记直连，不改写客户端文件，也不拉起代理。
+    #[tokio::test]
+    #[serial]
+    async fn first_startup_leaves_client_files_owned_by_cc_switch() {
+        let _home = Home::new();
+        let cc_switch = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = cc_switch.local_addr().unwrap().port();
+        let foreign = format!(
+            r#"{{"env":{{"ANTHROPIC_BASE_URL":"http://127.0.0.1:{port}","ANTHROPIC_AUTH_TOKEN":"PROXY_MANAGED"}},"hooks":{{}}}}"#
+        );
+        seed_settings(&foreign);
+        let state = state_with(
+            AppType::Claude,
+            &[claude("a", "https://a.example", json!({}))],
+            "a",
+        )
+        .await;
+        state
+            .db
+            .update_proxy_config(ProxyConfig {
+                listen_port: port,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        startup(&state).await;
+
+        let settled = mode(&AppType::Claude);
+        assert_eq!(settled.mode, Some(Mode::Direct));
+        assert!(!settled.attached);
+        assert_eq!(settings(), serde_json::from_str::<Value>(&foreign).unwrap());
+        assert!(!state.proxy_service.is_running().await);
     }
 
     #[tokio::test]

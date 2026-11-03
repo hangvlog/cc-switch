@@ -121,10 +121,13 @@ mod tests {
     use std::path::Path;
 
     /// 直接读直连指针的地方：定义处、这里，以及只关心直连指针的写入路径。
+    /// ClawKit 一键配置按原样快照、恢复本地和数据库两份指针，用于失败回滚。
     const ALLOWED: &[&str] = &[
         "settings.rs",
         "database/dao/providers.rs",
         "mode/current.rs",
+        "clawkit_codex_config_state.rs",
+        "clawkit_codex_config_state_tests.rs",
     ];
 
     fn scan(dir: &Path, root: &Path, hits: &mut Vec<String>) {

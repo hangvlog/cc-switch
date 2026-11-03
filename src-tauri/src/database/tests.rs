@@ -1684,3 +1684,27 @@ fn clawkit_directory_migration_materializes_internal_links_and_rejects_external_
     .is_err());
     assert!(!home.path().join("blocked").exists());
 }
+
+#[test]
+fn inherited_cc_switch_device_state_is_isolated_once() {
+    use crate::data_directory::isolate_inherited_device_state;
+    let device = tempfile::tempdir().unwrap();
+    let inherited = r#"{"version":1,"apps":{"claude-desktop":{"mode":"proxy","attached":true}}}"#;
+    std::fs::write(device.path().join("live-state.json"), inherited).unwrap();
+
+    isolate_inherited_device_state(device.path()).unwrap();
+    assert!(!device.path().join("live-state.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(device.path().join("live-state.inherited-from-cc-switch.json"))
+            .unwrap(),
+        inherited
+    );
+
+    // ClawKit's own state written afterwards survives later launches.
+    std::fs::write(device.path().join("live-state.json"), "{}").unwrap();
+    isolate_inherited_device_state(device.path()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(device.path().join("live-state.json")).unwrap(),
+        "{}"
+    );
+}

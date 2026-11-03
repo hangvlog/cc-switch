@@ -3,6 +3,7 @@ use crate::app_config::AppType;
 use crate::clawkit_gateway::GatewayBootstrap;
 use crate::database::Database;
 use crate::provider::Provider;
+use crate::proxy::types::ProxyConfig;
 use crate::store::AppState;
 use serde_json::json;
 use serial_test::serial;
@@ -52,7 +53,7 @@ experimental_bearer_token = "old-key"
 followUpQueueMode = "steer"
 "#;
 
-async fn seed_custom_takeover(state: &AppState) -> Provider {
+async fn seed_custom_route(state: &AppState) -> Provider {
     let custom = Provider::with_id(
         "custom".to_string(),
         "Custom".to_string(),
@@ -71,45 +72,46 @@ async fn seed_custom_takeover(state: &AppState) -> Provider {
         .expect("seed local current");
     state
         .db
-        .save_live_backup(
-            AppType::Codex.as_str(),
-            &serde_json::to_string(&custom.settings_config).expect("serialize takeover backup"),
-        )
+        .update_proxy_config(ProxyConfig {
+            listen_port: 0,
+            ..Default::default()
+        })
         .await
-        .expect("seed takeover backup");
-    let mut takeover = state
-        .db
-        .get_proxy_config_for_app(AppType::Codex.as_str())
-        .await
-        .expect("read Codex proxy config");
-    takeover.enabled = true;
-    state
-        .db
-        .update_proxy_config_for_app(takeover)
-        .await
-        .expect("seed enabled takeover");
+        .expect("ephemeral proxy port");
     std::fs::write(
         crate::codex_config::get_codex_config_dir().join("config.toml"),
-        r#"model_provider = "custom"
-[model_providers.custom]
-base_url = "http://127.0.0.1:15721/v1"
-experimental_bearer_token = "PROXY_MANAGED"
-"#,
+        CUSTOM_CONFIG,
     )
-    .expect("seed takeover live config");
+    .expect("seed direct live config");
+    crate::mode::controller::enter(state, &AppType::Codex, false)
+        .await
+        .expect("enter route mode");
     custom
+}
+
+fn codex_mode(state: &AppState) -> &'static str {
+    crate::mode::controller::app_mode_view(state, &AppType::Codex)
+        .expect("read Codex mode")
+        .mode
+}
+
+async fn stop_proxy(state: &AppState) {
+    if state.proxy_service.is_running().await {
+        state.proxy_service.stop().await.expect("stop proxy");
+    }
 }
 
 #[tokio::test]
 #[serial]
-async fn one_click_setup_replaces_custom_current_and_survives_takeover_recovery() {
+async fn one_click_setup_replaces_custom_current_and_survives_route_restart() {
     let _home = TestHome::new();
     let codex_home = crate::codex_config::get_codex_config_dir();
     std::fs::create_dir_all(&codex_home).expect("create Codex home");
 
     let db = Arc::new(Database::memory().expect("in-memory database"));
     let state = AppState::new(db.clone());
-    seed_custom_takeover(&state).await;
+    seed_custom_route(&state).await;
+    assert_eq!(codex_mode(&state), "route");
 
     let gateway = GatewayBootstrap {
         api_key: "sk-private".into(),
@@ -148,29 +150,16 @@ async fn one_click_setup_replaces_custom_current_and_survives_takeover_recovery(
         stored.meta.and_then(|meta| meta.api_format).as_deref(),
         Some("openai_responses")
     );
-    assert!(
-        !db.get_proxy_config_for_app(AppType::Codex.as_str())
-            .await
-            .expect("read takeover state")
-            .enabled
-    );
-    assert!(db
-        .get_live_backup(AppType::Codex.as_str())
-        .await
-        .expect("read takeover backup")
-        .is_none());
+    assert_eq!(codex_mode(&state), "direct");
 
-    state
-        .proxy_service
-        .recover_from_crash()
-        .await
-        .expect("simulate restart recovery");
-    let after_recovery = std::fs::read_to_string(codex_home.join("config.toml"))
-        .expect("read Live config after recovery");
+    crate::mode::controller::startup(&state).await;
+    let after_restart = std::fs::read_to_string(codex_home.join("config.toml"))
+        .expect("read Live config after restart");
     assert!(
-        after_recovery.contains(r#"model_provider = "clawkit""#),
-        "{after_recovery}"
+        after_restart.contains(r#"model_provider = "clawkit""#),
+        "{after_restart}"
     );
+    assert_eq!(codex_mode(&state), "direct");
 
     let rolled_back = rollback(&state).await.expect("rollback one-click setup");
     assert!(!rolled_back.configured);
@@ -188,34 +177,25 @@ async fn one_click_setup_replaces_custom_current_and_survives_takeover_recovery(
         .get_provider_by_id(PROVIDER_ID, AppType::Codex.as_str())
         .expect("read restored ClawKit provider")
         .is_none());
-    assert!(
-        db.get_proxy_config_for_app(AppType::Codex.as_str())
-            .await
-            .expect("read restored takeover state")
-            .enabled
-    );
-    assert!(db
-        .get_live_backup(AppType::Codex.as_str())
-        .await
-        .expect("read restored takeover backup")
-        .is_some());
+    assert_eq!(codex_mode(&state), "route");
     let live_after_rollback = std::fs::read_to_string(codex_home.join("config.toml"))
         .expect("read Live config after rollback");
     assert!(
-        live_after_rollback.contains("http://127.0.0.1:15721/v1"),
+        live_after_rollback.contains("127.0.0.1"),
         "{live_after_rollback}"
     );
+    stop_proxy(&state).await;
 }
 
 #[tokio::test]
 #[serial]
-async fn failed_one_click_setup_restores_previous_takeover_and_current_provider() {
+async fn failed_one_click_setup_restores_previous_route_and_current_provider() {
     let _home = TestHome::new();
     let codex_home = crate::codex_config::get_codex_config_dir();
     std::fs::create_dir_all(&codex_home).expect("create Codex home");
     let db = Arc::new(Database::memory().expect("in-memory database"));
     let state = AppState::new(db.clone());
-    seed_custom_takeover(&state).await;
+    seed_custom_route(&state).await;
 
     let gateway = GatewayBootstrap {
         api_key: "sk-private".into(),
@@ -237,20 +217,11 @@ async fn failed_one_click_setup_restores_previous_takeover_and_current_provider(
             .as_deref(),
         Some("custom")
     );
-    assert!(
-        db.get_proxy_config_for_app(AppType::Codex.as_str())
-            .await
-            .expect("read restored takeover state")
-            .enabled
-    );
-    assert!(db
-        .get_live_backup(AppType::Codex.as_str())
-        .await
-        .expect("read restored takeover backup")
-        .is_some());
+    assert_eq!(codex_mode(&state), "route");
     let live = std::fs::read_to_string(codex_home.join("config.toml"))
         .expect("read Live config after failed one-click setup");
-    assert!(live.contains("http://127.0.0.1:15721/v1"), "{live}");
+    assert!(live.contains("127.0.0.1"), "{live}");
+    stop_proxy(&state).await;
 }
 
 #[tokio::test]

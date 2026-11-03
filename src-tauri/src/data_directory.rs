@@ -12,25 +12,50 @@ use rusqlite::{
 use serde_json::{json, Value};
 
 const MARKER: &str = "clawkit-storage-v1.json";
+const DEVICE_STATE_MARKER: &str = "clawkit-device-state-v1.json";
 
 pub(crate) fn initialize(app: &tauri::AppHandle) -> Result<(), AppError> {
     crate::app_store::refresh_app_config_dir_override(app);
     let dest = crate::config::get_app_config_dir();
     validate_destination(&dest)?;
-    if dest.join(MARKER).exists() || dest.join("clawkit.db").exists() {
-        return Ok(());
+    if !(dest.join(MARKER).exists() || dest.join("clawkit.db").exists()) {
+        migrate_from_cc_switch(app, &dest)?;
     }
+    isolate_inherited_device_state(&crate::config::get_device_dir())
+}
+
+fn migrate_from_cc_switch(app: &tauri::AppHandle, dest: &Path) -> Result<(), AppError> {
     let home = crate::config::get_home_dir();
     let source = match crate::app_store::legacy_app_config_dir(app)? {
         Some(path) => path,
         None => legacy_default(&home),
     };
-    migrate(
-        &source,
-        &home.join(".cc-switch/settings.json"),
-        &crate::config::get_app_config_dir(),
-    )?;
+    migrate(&source, &home.join(".cc-switch/settings.json"), dest)?;
     Ok(())
+}
+
+/// 3.20.0 之前的 ClawKit 从不写设备模式状态；目录里已有的 `live-state.json` 只能是首次迁移
+/// 从 CC Switch 复制来的。沿用它会去接上 CC Switch 的路由并改写它正在管理的客户端配置，
+/// 所以第一次运行时改名留档，由 ClawKit 从直连重新开始记录。
+pub(crate) fn isolate_inherited_device_state(device_dir: &Path) -> Result<(), AppError> {
+    let marker = device_dir.join(DEVICE_STATE_MARKER);
+    if marker.exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(device_dir).map_err(|e| AppError::io(device_dir, e))?;
+    let state = device_dir.join("live-state.json");
+    let isolated = if state.exists() {
+        let target = device_dir.join("live-state.inherited-from-cc-switch.json");
+        fs::rename(&state, &target).map_err(|e| AppError::io(&state, e))?;
+        Some(target)
+    } else {
+        None
+    };
+    let record = json!({"version":1,"isolatedInheritedState":isolated,
+        "completedAt":chrono::Utc::now().to_rfc3339()});
+    fs::write(&marker, serde_json::to_vec_pretty(&record).unwrap())
+        .map_err(|e| AppError::io(&marker, e))?;
+    private_permissions(&marker, false)
 }
 
 fn legacy_default(home: &Path) -> PathBuf {

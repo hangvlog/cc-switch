@@ -2997,6 +2997,16 @@ fn recover_from_crash_without_backup_cleans_placeholder_instead_of_writing_it_ba
     .expect("write taken over live");
 
     let state = create_test_state().expect("create test state");
+    // 本机可能正开着 CC Switch 的路由服务：换一个空闲端口，模拟占位符无人监听。
+    let free_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .and_then(|listener| listener.local_addr())
+        .expect("free port")
+        .port();
+    let mut proxy_config =
+        futures::executor::block_on(state.db.get_proxy_config()).expect("proxy config");
+    proxy_config.listen_port = free_port;
+    futures::executor::block_on(state.db.update_proxy_config(proxy_config))
+        .expect("free proxy port");
 
     // 模拟历史异常：接管态 Live 已被导入成 current provider（SSOT 被污染）
     let provider = Provider::with_id(
@@ -3228,7 +3238,7 @@ fn claude_editor_global_settings_reach_account_dirs() {
     );
 
     // 本机账号表里有一个账号，目录已经建好
-    let app_dir = home.join(".cc-switch");
+    let app_dir = home.join(".clawkit");
     let local_id = "0123456789abcdef0123456789abcdef";
     let config_dir = app_dir
         .join("claude-accounts")
@@ -3672,7 +3682,7 @@ fn claude_editor_never_leaves_the_row_and_live_apart() {
     let (row, base) = open_claude_editor(&state, "a");
     let mut edited = base.clone();
     edited["env"]["ANTHROPIC_AUTH_TOKEN"] = json!("sk-new");
-    let db = rusqlite::Connection::open(home.join(".cc-switch/cc-switch.db")).expect("open db");
+    let db = rusqlite::Connection::open(home.join(".clawkit/clawkit.db")).expect("open db");
     db.execute_batch(
         "CREATE TRIGGER fail_edit BEFORE UPDATE OF settings_config ON providers \
          BEGIN SELECT RAISE(ABORT, 'injected save failure'); END;",
