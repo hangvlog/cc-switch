@@ -182,6 +182,12 @@ fn delivers_to_the_process_the_desktop_runs() {
     fs::write(sessions.join(format!("{pid}.json")), json!({"pid":pid,"sessionId":CLI_ID,"status":"idle","messagingSocketPath":socket}).to_string()).unwrap();
     fs::write(sessions.join(format!("{pid}.{}.key", "a".repeat(64))), json!({"peerToken":"0123456789abcdef0123456789abcdef"}).to_string()).unwrap();
     let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
+    assert_eq!(list["data"][0]["desktop"]["canSend"], false, "a bypass session holds messages from other processes");
+    assert!(list["data"][0]["desktop"]["reason"].as_str().unwrap().contains("crossSessionInbound"));
+    let held = f.claude.dispatch("claude/turn/start", &json!({"threadId":LOCAL_ID,"requestId":uuid::Uuid::new_v4().to_string(),"text":"x"})).unwrap_err();
+    assert!(held.contains("crossSessionInbound"), "{held}");
+    fs::write(f.root.path().join("claude-home/settings.json"), r#"{"crossSessionInbound":"accept"}"#).unwrap();
+    let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
     assert_eq!((list["data"][0]["desktop"]["status"].as_str(), list["data"][0]["desktop"]["canSend"].as_bool()), (Some("desktop-live"), Some(true)));
     let transcript = f.root.path().join("claude-home/projects").join(index::encode_project(&f.cwd)).join(format!("{CLI_ID}.jsonl"));
     let inbox = std::thread::spawn(move || {

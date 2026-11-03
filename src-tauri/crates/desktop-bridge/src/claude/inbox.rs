@@ -68,3 +68,80 @@ pub fn recorded(transcript: &Path, request_id: &str) -> bool {
     let needle = format!("uuid\":\"{request_id}\"");
     String::from_utf8_lossy(&tail).contains(&needle)
 }
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Inbound {
+    Accept,
+    /// Claude parks the message until you approve it on the desktop.
+    Hold,
+    Refuse,
+}
+
+fn setting(path: &Path) -> Option<String> {
+    let value: Value = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+    value["crossSessionInbound"].as_str().map(String::from)
+}
+
+/// What the receiving CLI does with a message from another local process,
+/// following its own `crossSessionInbound` rules: managed settings win, a
+/// repository may only tighten, then your user settings; without a setting, a
+/// session that skips permission prompts holds messages whose sender did not
+/// attest a matching permission mode.
+pub fn inbound(paths: &Paths, cwd: &str, permission_mode: Option<&str>) -> Inbound {
+    let parse = |v: &str| match v {
+        "accept" => Some(Inbound::Accept),
+        "hold" => Some(Inbound::Hold),
+        "refuse" => Some(Inbound::Refuse),
+        _ => Some(Inbound::Hold),
+    };
+    let managed = [Path::new("/Library/Application Support/ClaudeCode/managed-settings.json"), Path::new("/etc/claude-code/managed-settings.json")];
+    if let Some(value) = managed.iter().find_map(|p| setting(p)) {
+        return parse(&value).unwrap_or(Inbound::Hold);
+    }
+    let repo = Path::new(cwd).join(".claude/settings.json");
+    if let Some(value) = setting(&repo).filter(|v| v != "accept") {
+        return parse(&value).unwrap_or(Inbound::Hold);
+    }
+    let user = [paths.claude_home.join("settings.local.json"), paths.claude_home.join("settings.json"), Path::new(cwd).join(".claude/settings.local.json")];
+    if let Some(value) = user.iter().find_map(|p| setting(p)) {
+        return parse(&value).unwrap_or(Inbound::Hold);
+    }
+    if permission_mode == Some("bypassPermissions") { Inbound::Hold } else { Inbound::Accept }
+}
+
+pub fn blocked_reason(inbound: Inbound) -> Option<&'static str> {
+    match inbound {
+        Inbound::Accept => None,
+        Inbound::Hold => Some("这个会话在电脑上跳过权限确认，Claude 会把手机消息扣下等你在电脑上确认。在 Claude 设置（~/.claude/settings.json）加入 \"crossSessionInbound\": \"accept\" 后可直接发送"),
+        Inbound::Refuse => Some("Claude 设置拒绝接收其他程序发来的消息（crossSessionInbound: refuse），请在电脑上继续"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paths(home: &Path) -> Paths {
+        Paths { claude_home: home.to_path_buf(), app_data: None, registry: home.join("r.json"), cli_override: None }
+    }
+
+    #[test]
+    fn follows_cross_session_inbound_rules() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let repo = dir.path().join("repo");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(repo.join(".claude")).unwrap();
+        let cwd = repo.to_str().unwrap();
+        let p = paths(&home);
+        assert_eq!(inbound(&p, cwd, Some("bypassPermissions")), Inbound::Hold);
+        assert_eq!(inbound(&p, cwd, Some("acceptEdits")), Inbound::Accept);
+        fs::write(home.join("settings.json"), r#"{"crossSessionInbound":"accept"}"#).unwrap();
+        assert_eq!(inbound(&p, cwd, Some("bypassPermissions")), Inbound::Accept);
+        fs::write(repo.join(".claude/settings.json"), r#"{"crossSessionInbound":"hold"}"#).unwrap();
+        assert_eq!(inbound(&p, cwd, Some("acceptEdits")), Inbound::Hold, "a repository may tighten");
+        fs::write(repo.join(".claude/settings.json"), r#"{"crossSessionInbound":"accept"}"#).unwrap();
+        fs::write(home.join("settings.json"), r#"{"crossSessionInbound":"refuse"}"#).unwrap();
+        assert_eq!(inbound(&p, cwd, Some("acceptEdits")), Inbound::Refuse);
+    }
+}

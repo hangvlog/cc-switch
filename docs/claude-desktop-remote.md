@@ -93,6 +93,14 @@ session (3.19.83):
   (`canSteer`, `activeTurnId = desktop:<pid>`); it cannot stop or approve a
   desktop-run turn. Projection shows these records as your messages, without
   the notice. A live process without an inbox (older CLI) stays read-only.
+- The receiving CLI holds a message from another process when the session
+  runs `bypassPermissions` and the sender did not attest a permission mode,
+  unless `crossSessionInbound` is `accept` (managed settings win, a repository
+  `.claude/settings.json` may only tighten, then `~/.claude/settings.json` /
+  `settings.local.json`; `refuse` drops them). The bridge applies the same
+  rules (3.19.84) and keeps such sessions read-only with that reason instead
+  of sending into a hold. It does not assert `from-mode`: Claude documents
+  that field as declared only by the host on local stdin.
 
 Sessions with no live process run one CLI turn as before.
 

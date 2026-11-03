@@ -130,9 +130,13 @@ impl Claude {
         let running = self.turns.running(&session.cli_id);
         // An open desktop session runs its own process; messages go to its inbox.
         let desktop = session.live.as_ref().filter(|l| cfg!(unix) && l.socket.is_some() && running.is_none());
+        let blocked = desktop.and_then(|_| inbox::blocked_reason(inbox::inbound(&self.paths, &session.cwd, session.permission_mode.as_deref())));
+        let desktop = desktop.filter(|_| blocked.is_none());
         let desktop_busy = desktop.is_some_and(|l| l.status == "busy");
         let (can_send, reason) = if running.is_some() {
             (false, Some("正在执行，可等待完成或停止"))
+        } else if let Some(reason) = blocked {
+            (false, Some(reason))
         } else if desktop.is_some() {
             (true, None)
         } else if session.live.is_some() {
@@ -270,6 +274,11 @@ impl Claude {
     /// Hand the message to the process the desktop runs for this session; it
     /// runs (or joins) the turn there and the desktop shows it.
     fn deliver(&self, session: &index::Session, live: &index::Live, id: &str, text: &str) -> Result<Value, String> {
+        if live.socket.is_some() {
+            if let Some(reason) = inbox::blocked_reason(inbox::inbound(&self.paths, &session.cwd, session.permission_mode.as_deref())) {
+                return Err(reason.into());
+            }
+        }
         inbox::deliver(&self.paths, live, id, text)?;
         let transcript = session.transcript.as_deref().ok_or("电脑上没有这个会话的记录")?;
         let mut recorded = false;
