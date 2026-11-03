@@ -4,6 +4,7 @@
 //! the desktop runs and shows the turn; a second process would silently fork
 //! the conversation. Other sessions run one CLI turn on the desktop's gateway.
 mod activity;
+mod adopt;
 mod gateway;
 mod inbox;
 mod index;
@@ -42,11 +43,14 @@ impl ClaudeEvents {
     }
 }
 
+type Adopter = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
+
 pub struct Claude {
     paths: Paths,
     events: ClaudeEvents,
     turns: runner::Turns,
     search: search::Search,
+    adopter: Adopter,
 }
 
 fn request_id(params: &Value) -> Result<&str, String> {
@@ -81,7 +85,10 @@ impl Claude {
     }
 
     pub fn with_paths(paths: Paths) -> Self {
-        Self { paths, events: ClaudeEvents::default(), turns: runner::Turns::default(), search: search::Search::default() }
+        Self {
+            paths, events: ClaudeEvents::default(), turns: runner::Turns::default(), search: search::Search::default(),
+            adopter: std::sync::Arc::new(adopt::open),
+        }
     }
 
     pub fn events(&self) -> ClaudeEvents {
@@ -231,6 +238,8 @@ impl Claude {
         let running = self.turns.running(&session.cli_id).map(|r| r.turn_id.clone());
         let projection = projection::project(&projection::read_records(path)?, limit, running.as_deref());
         let mut thread = self.summary(&session);
+        // After the desktop imports a phone-created session, keep the id the phone asked for.
+        thread["id"] = json!(params["threadId"]);
         thread["preview"] = json!(projection.preview);
         thread["turns"] = Value::Array(projection.turns);
         thread["totalTurns"] = json!(projection.total_turns);
@@ -268,7 +277,7 @@ impl Claude {
         }
         let launch = self.launch(&session.cwd, ["--resume", &session.cli_id], session.model.as_deref(),
             session.permission_mode.as_deref(), session.cli_version.as_deref())?;
-        self.turns.start(&self.events, &session.cli_id, &session.id, id, text, launch)
+        self.turns.start(&self.events, &session.cli_id, &session.id, id, text, launch, None)
     }
 
     /// Hand the message to the process the desktop runs for this session; it
@@ -310,6 +319,23 @@ impl Claude {
         let cli_id = uuid::Uuid::new_v4().to_string();
         let launch = self.launch(cwd, ["--session-id", &cli_id], model.as_deref(), Some("acceptEdits"), None)?;
         index::remember(&self.paths, &cli_id, cwd, &projection::truncate(text, 60))?;
-        self.turns.start(&self.events, &cli_id, &format!("cli:{cli_id}"), id, text, launch)
+        // Only the desktop's index makes the session appear there; ask it to import
+        // the transcript once this process has exited, so it never has two writers.
+        let (paths, adopter, events) = (self.paths.clone(), self.adopter.clone(), self.events.clone());
+        let (session_id, folder) = (cli_id.clone(), cwd.to_string());
+        let after: runner::AfterExit = Box::new(move || {
+            if index::find_transcript(&paths, &session_id, &folder).is_none() {
+                return;
+            }
+            let result = adopter(&session_id);
+            events.push(json!({"method":"claude/event","params":{"threadId":format!("cli:{session_id}"),"kind":"desktopImport",
+                "accepted":result.is_ok(),"error":result.err()}}));
+        });
+        self.turns.start(&self.events, &cli_id, &format!("cli:{cli_id}"), id, text, launch, Some(after))
+    }
+
+    #[cfg(test)]
+    fn set_adopter(&mut self, adopter: Adopter) {
+        self.adopter = adopter;
     }
 }

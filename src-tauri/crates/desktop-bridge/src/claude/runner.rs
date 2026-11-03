@@ -15,6 +15,9 @@ use std::{
 const MAX_RECEIPTS: usize = 256;
 const MAX_STDERR: usize = 4096;
 
+/// Runs once the turn's process has exited.
+pub type AfterExit = Box<dyn FnOnce() + Send>;
+
 pub struct Launch {
     pub cli: PathBuf,
     pub cwd: PathBuf,
@@ -95,7 +98,7 @@ impl Turns {
         self.receipts.lock().ok()?.iter().find(|(id, _)| id == request_id).map(|(_, v)| v.clone())
     }
 
-    pub fn start(&self, events: &ClaudeEvents, cli_id: &str, thread_id: &str, request_id: &str, text: &str, launch: Launch) -> Result<Value, String> {
+    pub fn start(&self, events: &ClaudeEvents, cli_id: &str, thread_id: &str, request_id: &str, text: &str, launch: Launch, after: Option<AfterExit>) -> Result<Value, String> {
         let mut running = self.running.lock().map_err(|_| "执行状态不可用")?;
         if running.contains_key(cli_id) {
             return Err("这个会话正在执行，请等待完成或先停止".into());
@@ -142,7 +145,10 @@ impl Turns {
         let turns = self.clone();
         let events = events.clone();
         let cli_id = cli_id.to_string();
-        std::thread::spawn(move || turns.pump(&events, &cli_id, turn, stdout, errors));
+        std::thread::spawn(move || {
+            turns.pump(&events, &cli_id, turn, stdout, errors);
+            if let Some(after) = after { after(); }
+        });
         Ok(receipt)
     }
 

@@ -277,5 +277,8 @@ pub fn resolve(paths: &Paths, id: &str) -> Result<Session, String> {
     if !valid {
         return Err("Claude 会话 ID 无效".into());
     }
-    sessions(paths, true).into_iter().find(|s| s.id == id).ok_or_else(|| "电脑上找不到这个 Claude 会话".into())
+    // A phone-created `cli:` session keeps working after the desktop imports it as `local_`.
+    let cli_id = id.strip_prefix("cli:");
+    sessions(paths, true).into_iter().find(|s| s.id == id || cli_id == Some(s.cli_id.as_str()))
+        .ok_or_else(|| "电脑上找不到这个 Claude 会话".into())
 }

@@ -211,3 +211,45 @@ fn delivers_to_the_process_the_desktop_runs() {
     assert_eq!(last["items"][0]["content"][0]["text"], "从手机发到电脑");
     let _ = fs::remove_file(&socket);
 }
+
+#[test]
+fn hands_phone_created_sessions_to_the_desktop_after_the_turn() {
+    let mut f = fixture();
+    let adopted = Arc::new(Mutex::new(Vec::<String>::new()));
+    let calls = adopted.clone();
+    f.claude.set_adopter(Arc::new(move |id: &str| { calls.lock().unwrap().push(id.into()); Ok(()) }));
+    let events = f.claude.events();
+    let receipt = f.claude.dispatch("claude/thread/create", &json!({"cwd":f.cwd,"requestId":uuid::Uuid::new_v4().to_string(),"text":"新会话"})).unwrap();
+    let thread = receipt["threadId"].as_str().unwrap().to_string();
+    let cli_id = thread.strip_prefix("cli:").unwrap().to_string();
+    let mut seen = Vec::new();
+    wait_for(&events, &mut seen, "approval");
+    // The CLI writes its transcript during the turn; nothing is imported while it runs.
+    let project = f.root.path().join("claude-home/projects").join(index::encode_project(&f.cwd));
+    fs::write(project.join(format!("{cli_id}.jsonl")), json!({"type":"user","uuid":"n1","parentUuid":null,
+        "timestamp":"2026-11-03T11:47:19.000Z","message":{"role":"user","content":"新会话"}}).to_string()).unwrap();
+    assert!(adopted.lock().unwrap().is_empty());
+    f.claude.dispatch("claude/request/respond", &json!({"threadId":thread,"requestId":"perm-1","decision":"accept"})).unwrap();
+    wait_for(&events, &mut seen, "completed");
+    let imported = wait_for(&events, &mut seen, "desktopImport");
+    assert_eq!(imported["params"]["threadId"], thread);
+    assert_eq!(imported["params"]["accepted"], true);
+    assert_eq!(*adopted.lock().unwrap(), vec![cli_id.clone()]);
+
+    // The desktop records the import under its own id; the phone's id keeps working.
+    let index_dir = f.root.path().join("Claude-3p/claude-code-sessions/acct/org");
+    fs::write(index_dir.join(format!("local_{cli_id}.json")), json!({"sessionId":format!("local_{cli_id}"),"cliSessionId":cli_id,
+        "cwd":f.cwd,"createdAt":1_793_706_852_183u64,"isArchived":false,"permissionMode":"acceptEdits"}).to_string()).unwrap();
+    let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
+    let ids: Vec<&str> = list["data"].as_array().unwrap().iter().filter_map(|t| t["id"].as_str()).collect();
+    assert!(ids.contains(&format!("local_{cli_id}").as_str()) && !ids.contains(&thread.as_str()), "{ids:?}");
+    let read = f.claude.dispatch("claude/thread/read", &json!({"threadId":thread})).unwrap();
+    assert_eq!(read["thread"]["id"], thread);
+    assert_eq!(read["thread"]["cliSessionId"], cli_id);
+}
+
+#[test]
+fn resume_link_targets_only_session_ids() {
+    assert_eq!(adopt::resume_url(CLI_ID).as_deref(), Some("claude://resume?session=747a8e82-3bed-4378-be99-80f2dcec6d9b"));
+    assert!(adopt::resume_url("x&session=evil").is_none());
+}
