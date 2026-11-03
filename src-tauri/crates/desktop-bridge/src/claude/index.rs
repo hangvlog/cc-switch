@@ -58,6 +58,8 @@ fn app_candidates(home: &Path) -> Vec<PathBuf> {
 pub struct Live {
     pub pid: i64,
     pub status: String,
+    /// Cross-session inbox of that process; phone messages are delivered here.
+    pub socket: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -145,7 +147,8 @@ pub fn live_processes(paths: &Paths) -> HashMap<String, Live> {
         let Some(record) = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
         let (Some(pid), Some(id)) = (record["pid"].as_i64(), record["sessionId"].as_str()) else { continue };
         if pid_alive(pid) {
-            live.insert(id.to_string(), Live { pid, status: record["status"].as_str().unwrap_or("unknown").into() });
+            let socket = record["messagingSocketPath"].as_str().map(PathBuf::from).filter(|p| p.is_absolute());
+            live.insert(id.to_string(), Live { pid, status: record["status"].as_str().unwrap_or("unknown").into(), socket });
         }
     }
     live

@@ -109,7 +109,7 @@ fn refuses_sessions_open_on_the_desktop_and_unknown_projects() {
     fs::create_dir_all(&sessions).unwrap();
     fs::write(sessions.join("1.json"), json!({"pid":std::process::id(),"sessionId":CLI_ID,"status":"idle"}).to_string()).unwrap();
     let error = f.claude.dispatch("claude/turn/start", &json!({"threadId":LOCAL_ID,"requestId":uuid::Uuid::new_v4().to_string(),"text":"go"})).unwrap_err();
-    assert!(error.contains("电脑上打开"));
+    assert!(error.contains("不支持接收手机消息"), "{error}");
     let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
     assert_eq!(list["data"][0]["desktop"]["status"], "desktop-open");
     let create = f.claude.dispatch("claude/thread/create", &json!({"cwd":"/","requestId":uuid::Uuid::new_v4().to_string(),"text":"x"}));
@@ -168,4 +168,40 @@ fn reports_unread_waiting_and_searches_sent_messages() {
     assert_eq!(found["data"][0]["id"], LOCAL_ID);
     assert_eq!(found["data"][0]["searchMatch"]["snippet"], "hello");
     assert_eq!(f.claude.dispatch("claude/thread/search", &json!({"query":"hi"})).unwrap()["total"], 0);
+}
+
+#[test]
+fn delivers_to_the_process_the_desktop_runs() {
+    use std::{io::{BufRead, BufReader, Write}, os::unix::net::UnixListener};
+    let f = fixture();
+    let sessions = f.root.path().join("claude-home/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let socket = std::path::PathBuf::from(format!("/tmp/clawkit-inbox-test-{}.sock", uuid::Uuid::new_v4().simple()));
+    let listener = UnixListener::bind(&socket).unwrap();
+    let pid = std::process::id();
+    fs::write(sessions.join(format!("{pid}.json")), json!({"pid":pid,"sessionId":CLI_ID,"status":"idle","messagingSocketPath":socket}).to_string()).unwrap();
+    fs::write(sessions.join(format!("{pid}.{}.key", "a".repeat(64))), json!({"peerToken":"0123456789abcdef0123456789abcdef"}).to_string()).unwrap();
+    let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
+    assert_eq!((list["data"][0]["desktop"]["status"].as_str(), list["data"][0]["desktop"]["canSend"].as_bool()), (Some("desktop-live"), Some(true)));
+    let transcript = f.root.path().join("claude-home/projects").join(index::encode_project(&f.cwd)).join(format!("{CLI_ID}.jsonl"));
+    let inbox = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let lines: Vec<Value> = BufReader::new(stream).lines().map(|l| serde_json::from_str(&l.unwrap()).unwrap()).collect();
+        let id = lines[1]["uuid"].as_str().unwrap().to_string();
+        let mut file = fs::OpenOptions::new().append(true).open(&transcript).unwrap();
+        writeln!(file, "\n{}", json!({"type":"user","uuid":id,"parentUuid":"a1","isMeta":true,"origin":{"kind":"peer","from":inbox::FROM},
+            "timestamp":"2026-10-30T08:38:00.000Z","message":{"role":"user","content":format!("Another Claude session sent a message:\n{}\n\nThis came from another Claude session — not typed by your user.", lines[1]["message"]["content"].as_str().unwrap())}})).unwrap();
+        lines
+    });
+    let request = uuid::Uuid::new_v4().to_string();
+    let receipt = f.claude.dispatch("claude/turn/start", &json!({"threadId":LOCAL_ID,"requestId":request,"text":"从手机发到电脑"})).unwrap();
+    let lines = inbox.join().unwrap();
+    assert_eq!(lines[0], json!({"type":"auth","token":"0123456789abcdef0123456789abcdef"}));
+    assert_eq!((lines[1]["from"].as_str(), lines[1]["uuid"].as_str()), (Some(inbox::FROM), Some(request.as_str())));
+    assert_eq!((receipt["deliveredTo"].as_str(), receipt["recorded"].as_bool()), (Some("desktop"), Some(true)));
+    assert_eq!(f.claude.dispatch("claude/turn/start", &json!({"threadId":LOCAL_ID,"requestId":request,"text":"从手机发到电脑"})).unwrap(), receipt);
+    let read = f.claude.dispatch("claude/thread/read", &json!({"threadId":LOCAL_ID})).unwrap();
+    let last = read["thread"]["turns"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(last["items"][0]["content"][0]["text"], "从手机发到电脑");
+    let _ = fs::remove_file(&socket);
 }

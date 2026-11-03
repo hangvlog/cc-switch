@@ -100,9 +100,39 @@ pub fn user_text(content: &Value) -> Option<String> {
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
+const PEER_HEADER: &str = "Another Claude session sent a message";
+const PEER_FOOTER: &str = "\n\nThis came from another Claude session";
+
+/// What you typed on the phone, delivered through the desktop session's inbox:
+/// a turn-starting `user` record (wrapped in the CLI's peer notice) or a
+/// `queued_command` attachment when it joined a running turn.
+fn phone_text(record: &Value) -> Option<String> {
+    let (origin, text) = match record["type"].as_str() {
+        Some("user") => (&record["origin"], record["message"]["content"].as_str()?),
+        Some("attachment") if record["attachment"]["type"] == "queued_command" => (&record["attachment"]["origin"], record["attachment"]["prompt"].as_str()?),
+        _ => return None,
+    };
+    if origin["kind"] != "peer" || origin["from"].as_str() != Some(super::inbox::FROM) {
+        return None;
+    }
+    let body = match text.strip_prefix(PEER_HEADER).and_then(|rest| rest.split_once('\n')) {
+        Some((_, rest)) => rest.split(PEER_FOOTER).next().unwrap_or(rest),
+        None => text,
+    };
+    Some(body.trim().to_string()).filter(|t| !t.is_empty())
+}
+
+/// The text of a message you sent, if this record is one.
+pub fn sent_text(record: &Value) -> Option<String> {
+    phone_text(record).or_else(|| starts_turn(record).then(|| user_text(&record["message"]["content"])).flatten())
+}
+
 /// A message you sent: from the desktop composer (`origin.kind == "human"`) or
 /// a phone/CLI turn (no origin). Task notifications and summaries are not.
 pub fn starts_turn(record: &Value) -> bool {
+    if record["type"] == "user" && phone_text(record).is_some() {
+        return true;
+    }
     record["type"] == "user" && record["isMeta"] != true && record["isSidechain"] != true && record["isCompactSummary"] != true
         && (record["origin"].is_null() || record["origin"]["kind"] == "human")
         && user_text(&record["message"]["content"]).is_some()
@@ -192,6 +222,14 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
     let mut items: Vec<Value> = Vec::new();
     let mut preview = String::new();
     for record in active_chain(records) {
+        if record["type"] == "attachment" {
+            // A phone message that joined a running turn.
+            if let (Some(text), false) = (phone_text(record), turns.is_empty()) {
+                let id = record["uuid"].as_str().unwrap_or("");
+                items.push(json!({"type":"userMessage","id":id,"content":[{"type":"text","text":clip(&text,MAX_TEXT)}]}));
+            }
+            continue;
+        }
         if !conversational(record) {
             continue;
         }
@@ -201,7 +239,7 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
                 turn["items"] = Value::Array(std::mem::take(&mut items));
             }
             if preview.is_empty() {
-                preview = truncate(&user_text(&record["message"]["content"]).unwrap_or_default(), 160);
+                preview = truncate(&sent_text(record).unwrap_or_default(), 160);
             }
             turns.push(json!({"id":id,"status":"completed","items":[],"startedAt":seconds(&record["timestamp"])}));
         }
@@ -213,7 +251,10 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
         if role == "user" && !starts_turn(record) && !record["message"]["content"].as_array().is_some_and(|b| b.iter().any(|b| b["type"] == "tool_result")) {
             continue;
         }
-        apply_message(&mut items, id, role, &record["message"]["content"]);
+        match phone_text(record) {
+            Some(text) => apply_message(&mut items, id, role, &Value::String(text)),
+            None => apply_message(&mut items, id, role, &record["message"]["content"]),
+        }
         turns.last_mut().unwrap()["completedAt"] = json!(seconds(&record["timestamp"]));
     }
     if let Some(turn) = turns.last_mut() {
@@ -306,6 +347,23 @@ mod tests {
         assert_eq!(projection.preview, "真正的问题");
         let shown = serde_json::to_string(&projection.turns).unwrap();
         assert!(!shown.contains("secret") && !shown.contains("task-id") && !shown.contains("interrupted"), "{shown}");
+    }
+
+    #[test]
+    fn shows_phone_messages_delivered_to_the_desktop() {
+        let peer = json!({"kind":"peer","from":crate::claude::inbox::FROM});
+        let mut started = rec("user", "p1", Some("a1"), json!("Another Claude session sent a message:\n手机上的问题\n\nThis came from another Claude session — not typed by your user."));
+        started["isMeta"] = json!(true);
+        started["origin"] = peer.clone();
+        let joined = json!({"type":"attachment","uuid":"q1","parentUuid":"p1","attachment":{"type":"queued_command","prompt":"补充一句","origin":peer}});
+        let mut other = rec("user", "o1", Some("q1"), json!("Another Claude session sent a message:\nfrom a real peer"));
+        other["isMeta"] = json!(true);
+        other["origin"] = json!({"kind":"peer","from":"uds:/tmp/x.sock"});
+        let records = vec![rec("user", "u1", None, json!("desktop question")), rec("assistant", "a1", Some("u1"), json!([{"type":"text","text":"ok"}])), started, joined, other];
+        let projection = project(&records, 20, None);
+        assert_eq!(projection.total_turns, 2);
+        let shown = serde_json::to_string(&projection.turns[1]).unwrap();
+        assert!(shown.contains("手机上的问题") && shown.contains("补充一句") && !shown.contains("This came from") && !shown.contains("real peer"), "{shown}");
     }
 
     #[test]

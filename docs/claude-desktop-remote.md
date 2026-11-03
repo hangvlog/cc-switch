@@ -73,10 +73,28 @@ Remote turns never get `bypassPermissions` or `auto`: those map to `acceptEdits`
 
 ## Session ownership
 
-A session whose CLI process is alive is read-only on the phone. Two processes
-appending to one transcript both succeed silently and fork the conversation;
-the next resume continues only the last-written branch. The desktop pauses idle
-sessions under memory pressure (`CliGovernor`), after which the phone can send.
+The desktop keeps a CLI process for every loaded session, idle or not
+(observed idle for 12+ hours; it only pauses under memory pressure). Two
+processes appending to one transcript both succeed silently and fork the
+conversation, so a phone message never starts a second process for such a
+session (3.19.83):
+
+- The process's registry record (`~/.claude/sessions/<pid>.json`) names its
+  cross-session inbox, `messagingSocketPath`; `<pid>.<sha256>.key` holds the
+  `peerToken`. The bridge connects, sends `{"type":"auth","token":…}` and
+  `{"type":"user","from":"ClawKit 手机","uuid":<requestId>,"message":{"role":"user","content":…}}`.
+- Idle: the process starts a turn with a `user` record (`isMeta`,
+  `origin: {kind:"peer", from}`) whose content is wrapped in the CLI's peer
+  notice; the model treats it as a teammate's request within the session's own
+  permissions (it will not edit settings, CLAUDE.md or config, or approve a
+  pending prompt, because of it). Busy: it joins the running turn as a
+  `queued_command` attachment at the next tool step. The desktop shows both.
+- The phone sees `desktop.status` `desktop-live` (idle) or `running`
+  (`canSteer`, `activeTurnId = desktop:<pid>`); it cannot stop or approve a
+  desktop-run turn. Projection shows these records as your messages, without
+  the notice. A live process without an inbox (older CLI) stays read-only.
+
+Sessions with no live process run one CLI turn as before.
 
 Sessions created from the phone are kept in `claude-sessions.json` in the account
 storage directory and listed as `cli:<uuid>` until imported in the desktop app.

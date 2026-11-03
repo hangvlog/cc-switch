@@ -84,6 +84,13 @@ impl Turns {
         self.running.lock().ok()?.get(cli_id).cloned()
     }
 
+    pub fn remember(&self, request_id: &str, receipt: &Value) {
+        if let Ok(mut receipts) = self.receipts.lock() {
+            if receipts.len() >= MAX_RECEIPTS { receipts.remove(0); }
+            receipts.push((request_id.into(), receipt.clone()));
+        }
+    }
+
     pub fn receipt(&self, request_id: &str) -> Option<Value> {
         self.receipts.lock().ok()?.iter().find(|(id, _)| id == request_id).map(|(_, v)| v.clone())
     }

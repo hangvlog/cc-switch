@@ -1,10 +1,11 @@
 //! Claude desktop (Code tab) sessions on this computer, exposed to the phone.
-//! Lists and transcripts come from the desktop's own files; a phone message
-//! runs one CLI turn on the gateway the desktop is configured with. A session
-//! whose CLI process is alive (open in the desktop) is read-only: two writers
-//! silently fork the conversation.
+//! Lists and transcripts come from the desktop's own files. A message to a
+//! session the desktop has loaded goes into that desktop process's inbox, so
+//! the desktop runs and shows the turn; a second process would silently fork
+//! the conversation. Other sessions run one CLI turn on the desktop's gateway.
 mod activity;
 mod gateway;
+mod inbox;
 mod index;
 mod projection;
 mod runner;
@@ -127,27 +128,37 @@ impl Claude {
 
     fn summary(&self, session: &index::Session) -> Value {
         let running = self.turns.running(&session.cli_id);
+        // An open desktop session runs its own process; messages go to its inbox.
+        let desktop = session.live.as_ref().filter(|l| cfg!(unix) && l.socket.is_some() && running.is_none());
+        let desktop_busy = desktop.is_some_and(|l| l.status == "busy");
         let (can_send, reason) = if running.is_some() {
             (false, Some("正在执行，可等待完成或停止"))
+        } else if desktop.is_some() {
+            (true, None)
         } else if session.live.is_some() {
-            (false, Some("此会话正在电脑上打开，暂不能从手机发送；电脑闲置几分钟后会自动释放"))
+            (false, Some("电脑上的 Claude 版本不支持接收手机消息，请在电脑上更新 Claude"))
         } else if session.transcript.is_none() {
             (false, Some("电脑上没有这个会话的记录"))
         } else {
             (true, None)
         };
+        let status = if running.is_some() || desktop_busy { "running" } else if desktop.is_some() { "desktop-live" } else if session.live.is_some() { "desktop-open" } else { "idle" };
+        let active_turn = running.as_ref().map(|r| r.turn_id.clone()).or_else(|| desktop_busy.then(|| format!("desktop:{}", session.live.as_ref().map_or(0, |l| l.pid))));
         json!({
             "id":session.id,"engine":"claude","cliSessionId":session.cli_id,
             "name":(!session.title.is_empty()).then_some(&session.title),"preview":"","cwd":session.cwd,
             "createdAt":session.created_at / 1000,"updatedAt":session.updated_at() / 1000,"updatedAtMs":session.updated_at(),
             "model":session.model,"archived":session.archived,"turns":[],
-            "status":{"type":if running.is_some() {"active"} else {"idle"}},
+            "status":{"type":if active_turn.is_some() {"active"} else {"idle"}},
             "desktop":{
                 "source":"claude-desktop","observedAt":crate::now_ms(),
-                "status":if running.is_some() {"running"} else if session.live.is_some() {"desktop-open"} else {"idle"},
+                "status":status,
                 "live":session.live.as_ref().map(|l| json!({"pid":l.pid,"status":l.status})),
                 "canSend":can_send,"reason":reason,"canInterrupt":running.is_some(),
-                "activeTurnId":running.as_ref().map(|r| r.turn_id.clone()),
+                // A turn the desktop is running accepts messages mid-turn, like typing into it.
+                "canSteer":desktop_busy,
+                "deliversToDesktop":desktop.is_some(),
+                "activeTurnId":active_turn,
                 "approvals":running.as_ref().map(|r| r.approvals()).unwrap_or_default(),
                 "model":session.model,
                 "turnEndedAt":session.turn_ended_at,"focusedAt":session.focused_at,"waitingOnDesktop":session.waiting,
@@ -242,15 +253,36 @@ impl Claude {
         }
         let text = message_text(params)?;
         let session = index::resolve(&self.paths, params["threadId"].as_str().unwrap_or(""))?;
-        if session.live.is_some() {
-            return Err("此会话正在电脑上打开，暂不能从手机发送；电脑闲置几分钟后会自动释放".into());
-        }
         if session.transcript.is_none() {
             return Err("电脑上没有这个会话的记录".into());
+        }
+        if self.turns.running(&session.cli_id).is_some() {
+            return Err("正在执行，可等待完成或停止".into());
+        }
+        if let Some(live) = session.live.as_ref() {
+            return self.deliver(&session, live, id, text);
         }
         let launch = self.launch(&session.cwd, ["--resume", &session.cli_id], session.model.as_deref(),
             session.permission_mode.as_deref(), session.cli_version.as_deref())?;
         self.turns.start(&self.events, &session.cli_id, &session.id, id, text, launch)
+    }
+
+    /// Hand the message to the process the desktop runs for this session; it
+    /// runs (or joins) the turn there and the desktop shows it.
+    fn deliver(&self, session: &index::Session, live: &index::Live, id: &str, text: &str) -> Result<Value, String> {
+        inbox::deliver(&self.paths, live, id, text)?;
+        let transcript = session.transcript.as_deref().ok_or("电脑上没有这个会话的记录")?;
+        let mut recorded = false;
+        for _ in 0..20 {
+            recorded = inbox::recorded(transcript, id);
+            if recorded {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(150));
+        }
+        let receipt = json!({"threadId":session.id,"turnId":id,"accepted":true,"deliveredTo":"desktop","recorded":recorded});
+        self.turns.remember(id, &receipt);
+        Ok(receipt)
     }
 
     fn create(&self, params: &Value) -> Result<Value, String> {

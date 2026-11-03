@@ -19,14 +19,11 @@ struct Indexed {
 pub struct Search(Mutex<HashMap<PathBuf, Indexed>>);
 
 fn user_message(line: &str) -> Option<String> {
-    if !line.contains("\"type\":\"user\"") {
+    if !line.contains("\"type\":\"user\"") && !line.contains("queued_command") {
         return None;
     }
     let record: Value = serde_json::from_str(line).ok()?;
-    if !super::projection::starts_turn(&record) {
-        return None;
-    }
-    super::projection::user_text(&record["message"]["content"])
+    super::projection::sent_text(&record)
 }
 
 fn refresh(entry: &mut Indexed, path: &Path) -> Result<(), String> {
