@@ -1,5 +1,7 @@
 # Newer SQLite schema compatibility
 
+> 3.20.0 起已移除：合并上游 v4.0.25 后应用自身迁移到 v24，本兼容层的放行区间为空。见 [clawkit-upstream-v4-merge.md](clawkit-upstream-v4-merge.md)。以下为 3.19.80–3.19.84 的历史说明。
+
 ClawKit Desktop 3.19.80 separates its migration version (20) from audited
 read/write compatibility (21–24). The reported failure was Desktop 3.19.75
 opening a v23 database initially copied from CC Switch 4.0.21. SQLite integrity
