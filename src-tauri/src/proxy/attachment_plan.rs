@@ -25,7 +25,10 @@ fn candidates(value: &Value, path: &str, out: &mut Vec<(String, String, String, 
                 Some("input_file") => ("file_data", true),
                 _ => ("", false),
             };
-            if let Some(raw) = object.get(field).and_then(Value::as_str) {
+            // Native Responses file_url is mutually exclusive with filename.
+            // Keep named inline files unchanged; removing names would alter client fields.
+            let url_compatible = !file || !object.contains_key("filename");
+            if let Some(raw) = object.get(field).and_then(Value::as_str).filter(|_| url_compatible) {
                 let parsed = raw
                     .strip_prefix("data:")
                     .and_then(|data| {
@@ -142,13 +145,15 @@ mod tests {
             .starts_with("data:"));
     }
     #[test]
-    fn pdf_conversion_preserves_filename() {
+    fn named_pdf_is_preserved_and_unnamed_pdf_can_use_url() {
         let raw = STANDARD.encode([b"%PDF-".as_slice(), vec![0; 4096].as_slice()].concat());
         let mut body = json!({"input":[{"role":"user","content":[{"type":"input_file","file_data":raw,"filename":"report.pdf"}]}]});
+        assert!(plan(&body, 20 << 20).unwrap().is_empty());
+        assert_eq!(body["input"][0]["content"][0]["filename"], "report.pdf");
+        body["input"][0]["content"][0].as_object_mut().unwrap().remove("filename");
         let planned = plan(&body, 20 << 20).unwrap();
         replace(&mut body, &planned[0], "https://example.test/file").unwrap();
         assert!(body["input"][0]["content"][0].get("file_data").is_none());
-        assert_eq!(body["input"][0]["content"][0]["filename"], "report.pdf");
         assert_eq!(
             body["input"][0]["content"][0]["file_url"],
             "https://example.test/file"

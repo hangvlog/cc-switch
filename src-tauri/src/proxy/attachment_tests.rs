@@ -107,7 +107,8 @@ async fn live_gateway_preserves_44_images_and_reuses_receipts() {
         let prepare_ms=start.elapsed().as_millis();
         assert!(optimized.len() <= 38<<20);
         assert_eq!(body["input"][2]["output"].as_array().unwrap().len(),44);
-        let response=CLIENT.post("https://api.clawkit.chat/v1/responses").headers(headers.clone()).header("Content-Type","application/json").body(optimized.clone()).send().await.unwrap();
+        let inference_client=reqwest::Client::builder().timeout(Duration::from_secs(240)).build().unwrap();
+        let response=inference_client.post("https://api.clawkit.chat/v1/responses").headers(headers.clone()).header("Content-Type","application/json").body(optimized.clone()).send().await.unwrap();
         let status=response.status();let text=response.text().await.unwrap();
         let completed=text.lines().filter_map(|s|s.strip_prefix("data: ")).filter_map(|s|serde_json::from_str::<Value>(s).ok()).find(|v|v["type"]=="response.completed");
         let recognized=completed.as_ref().is_some_and(|v|v.to_string().contains("K7M3Q9"));
@@ -117,4 +118,37 @@ async fn live_gateway_preserves_44_images_and_reuses_receipts() {
     tokio::time::sleep(Duration::from_secs(4)).await;
     match previous {Some(v)=>std::env::set_var("CC_SWITCH_TEST_HOME",v),None=>std::env::remove_var("CC_SWITCH_TEST_HOME")};
     crate::settings::reload_settings().unwrap();
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn live_http_proxy_offloads_44_images() {
+    let Ok(directory) = std::env::var("CLAWKIT_ATTACHMENT_LIVE_FIXTURES") else { return; };
+    let home = tempfile::tempdir().unwrap();
+    let previous = std::env::var_os("CC_SWITCH_TEST_HOME");
+    std::env::set_var("CC_SWITCH_TEST_HOME", home.path());
+    crate::settings::reload_settings().unwrap();
+    let bearer = std::fs::read_to_string(std::path::Path::new(&directory).join("api-token.private")).unwrap();
+    let db = Arc::new(crate::database::Database::memory().unwrap());
+    let mut provider = crate::provider::Provider::with_id("attachment-live".into(), "Attachment acceptance".into(),
+        json!({"base_url":"https://api.clawkit.chat/v1","auth":{"OPENAI_API_KEY":bearer.trim()}}),None);
+    provider.meta=Some(crate::provider::ProviderMeta{api_format:Some("openai_responses".into()),..Default::default()});
+    db.save_provider("codex",&provider).unwrap();
+    db.set_current_provider("codex",&provider.id).unwrap();
+    let proxy=crate::proxy::server::ProxyServer::new(crate::proxy::ProxyConfig{listen_port:0,enable_logging:false,max_retries:0,streaming_first_byte_timeout:120,streaming_idle_timeout:240,..Default::default()},db,None);
+    let info=proxy.start().await.unwrap();
+    let images:Vec<Value>=(0..44).map(|i| {let bytes=std::fs::read(std::path::Path::new(&directory).join(format!("image-{i}.png"))).unwrap();json!({"type":"input_image","image_url":format!("data:image/png;base64,{}",STANDARD.encode(bytes)),"detail":"high"})}).collect();
+    let body=json!({"model":"gpt-6.1-sol","reasoning":{"effort":"low"},"stream":true,"store":false,"input":[{"role":"user","content":[{"type":"input_text","text":"Read the code and color in the synthetic images; answer in one short line."}]},{"type":"custom_tool_call","id":"ctc_live_http","call_id":"call_live_http","name":"inspect_asset","input":"show images"},{"type":"custom_tool_call_output","id":"ctco_live_http","call_id":"call_live_http","output":images}]});
+    let input_bytes=serde_json::to_vec(&body).unwrap().len();assert!(input_bytes>40<<20);
+    let started=Instant::now();
+    let response=reqwest::Client::builder().no_proxy().timeout(Duration::from_secs(300)).build().unwrap().post(format!("http://127.0.0.1:{}/v1/responses",info.port)).header("Authorization","Bearer synthetic-local-client").json(&body).send().await.unwrap();
+    let status=response.status();let text=response.text().await.unwrap();
+    let completed=text.lines().filter_map(|s|s.strip_prefix("data: ")).filter_map(|s|serde_json::from_str::<Value>(s).ok()).find(|v|v["type"]=="response.completed");
+    let recognized=completed.as_ref().is_some_and(|v|v.to_string().contains("K7M3Q9"));
+    println!("live_http input_bytes={input_bytes} http_status={} completed={} recognized={recognized} duration_ms={}",status.as_u16(),completed.is_some(),started.elapsed().as_millis());
+    proxy.stop().await.unwrap();
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    match previous{Some(v)=>std::env::set_var("CC_SWITCH_TEST_HOME",v),None=>std::env::remove_var("CC_SWITCH_TEST_HOME")};
+    crate::settings::reload_settings().unwrap();
+    assert!(status.is_success()&&completed.is_some()&&recognized,"local HTTP proxy fixture failed");
 }
