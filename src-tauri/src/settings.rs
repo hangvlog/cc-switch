@@ -481,6 +481,9 @@ pub struct AppSettings {
     /// 是否在主页面启用本地代理功能（默认关闭）
     #[serde(default)]
     pub enable_local_proxy: bool,
+    /// Externalize only required native ClawKit Responses attachments when the upstream body is too large.
+    #[serde(default = "default_true")]
+    pub attachment_offload_enabled: bool,
     /// 是否在主页面显示 Stack 模式开关（默认关闭）。和 `enable_local_proxy` 二选一，只影响
     /// Claude Code、Codex：它们的开关换成 Stack 模式开关，其余应用仍显示路由开关。
     #[serde(default)]
@@ -706,6 +709,7 @@ impl Default for AppSettings {
             silent_startup: false,
             lightweight_mode: false,
             enable_local_proxy: false,
+            attachment_offload_enabled: true,
             enable_stack_mode: false,
             proxy_confirmed: None,
             usage_confirmed: None,

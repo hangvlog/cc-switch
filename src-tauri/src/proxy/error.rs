@@ -8,6 +8,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ProxyError {
+    #[error("Request body exceeds the upstream limit after attachment optimization: {0} bytes")]
+    RequestBodyTooLarge(usize),
+    #[error("Attachment preparation failed: {0}")]
+    AttachmentUpload(String),
+
     #[error("上游响应体超过大小上限: {0} 字节")]
     ResponseBodyTooLarge(usize),
 
@@ -165,6 +170,12 @@ impl IntoResponse for ProxyError {
                     }
                     ProxyError::Internal(_) => {
                         (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+                    }
+                    ProxyError::RequestBodyTooLarge(_) => {
+                        (StatusCode::PAYLOAD_TOO_LARGE, self.to_string())
+                    }
+                    ProxyError::AttachmentUpload(_) => {
+                        (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
                     }
                     ProxyError::ResponseBodyTooLarge(_) => {
                         (StatusCode::BAD_GATEWAY, self.to_string())

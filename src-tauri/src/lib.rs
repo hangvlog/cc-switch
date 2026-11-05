@@ -1441,6 +1441,9 @@ pub fn run() {
                 // 定下各应用的直连 / 代理模式（处理旧版遗留的接管状态），再把代理模式的
                 // 应用接上。要排在通用配置片段的自动提取之后：它读的是直连的 live。
                 crate::mode::controller::startup(&state).await;
+                if let Err(error) = crate::clawkit_codex_config::ensure_attachment_route(&state).await {
+                    log::warn!("ClawKit attachment route could not start: {error}");
+                }
                 // #8268 测试版给 agy 装过包装脚本、改过 shell 启动文件，撤掉带标记的部分。
                 if let Err(e) =
                     crate::services::provider::agy_direct::migrate_legacy_launcher(&state.db)
@@ -1604,6 +1607,7 @@ pub fn run() {
             commands::get_clawkit_codex_configuration_status,
             commands::get_clawkit_codex_model_options,
             commands::configure_clawkit_codex,
+            commands::set_clawkit_attachment_optimization,
             commands::rollback_clawkit_codex_configuration,
             commands::upload_clawkit_diagnostic_bundle,
             commands::get_clawkit_account_status,

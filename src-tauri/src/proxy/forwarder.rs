@@ -2687,6 +2687,12 @@ impl RequestForwarder {
             })?
         };
 
+        let body_bytes = if matches!(app_type, AppType::Codex)
+            && effective_endpoint.split('?').next().is_some_and(|path| matches!(path, "/responses" | "/v1/responses"))
+            && !codex_responses_to_chat && !codex_responses_to_anthropic {
+            super::attachment_offload::prepare(&mut filtered_body, body_bytes, &url, &ordered_headers).await?
+        } else { body_bytes };
+
         // 确保 content-type 存在
         if !ordered_headers.contains_key(http::header::CONTENT_TYPE) {
             ordered_headers.insert(

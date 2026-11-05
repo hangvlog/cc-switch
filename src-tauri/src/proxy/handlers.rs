@@ -8,7 +8,7 @@
 //! - Claude 的格式转换逻辑保留在此文件（用于 OpenRouter 旧接口回退）
 
 use super::{
-    content_encoding::{decompress_body, get_content_encoding, is_supported_content_encoding},
+    content_encoding::{decompress_body_with_limit, DecompressError, get_content_encoding, is_supported_content_encoding},
     error_mapper::{get_error_message, map_proxy_error_to_status},
     forwarder::{ActiveConnectionGuard, CodexUpstreamFormat},
     handler_config::{
@@ -935,7 +935,7 @@ fn decode_codex_request_body(
     }
 
     log::debug!("[Codex] 解压请求体: content-encoding={encoding}");
-    let decompressed = match decompress_body(&encoding, &body_bytes) {
+    let decompressed = match decompress_body_with_limit(&encoding, &body_bytes, 128 << 20) {
         Ok(Some(decompressed)) => decompressed,
         // is_supported_content_encoding 已确保编码受支持，正常不会返回 None；
         // 防御性兜底：宁可报错，也不能把压缩字节当 JSON 透传下去。
@@ -944,6 +944,7 @@ fn decode_codex_request_body(
                 "Unsupported request content-encoding: {encoding}"
             )));
         }
+        Err(DecompressError::TooLarge { .. }) => return Err(ProxyError::RequestBodyTooLarge((128 << 20)+1)),
         Err(e) => {
             log::warn!("[Codex] 请求体解压失败 ({encoding}): {e}");
             return Err(ProxyError::InvalidRequest(format!(
@@ -1092,11 +1093,9 @@ async fn handle_responses_for_app(
     let uri = parts.uri;
     let mut headers = parts.headers;
     let extensions = parts.extensions;
-    let body_bytes = req_body
-        .collect()
+    let body_bytes = axum::body::to_bytes(req_body, 128 << 20)
         .await
-        .map_err(|e| ProxyError::Internal(format!("Failed to read request body: {e}")))?
-        .to_bytes();
+        .map_err(|_| ProxyError::RequestBodyTooLarge((128 << 20)+1))?;
     let body_bytes = decode_codex_request_body(&mut headers, body_bytes)?;
     let mut body: Value = serde_json::from_slice(&body_bytes)
         .map_err(|e| ProxyError::Internal(format!("Failed to parse request body: {e}")))?;
@@ -2501,6 +2500,8 @@ fn codex_proxy_error_json(
 
 fn codex_proxy_error_code(error: &ProxyError) -> &'static str {
     match error {
+        ProxyError::RequestBodyTooLarge(_) => "clawkit_payload_too_large",
+        ProxyError::AttachmentUpload(_) => "clawkit_attachment_upload_failed",
         ProxyError::CodexQuotaProtection(_) => "cc_switch_codex_quota_protection",
         ProxyError::ForwardFailed(_) => "cc_switch_forward_failed",
         ProxyError::Timeout(_) | ProxyError::StreamIdleTimeout(_) => "cc_switch_timeout",

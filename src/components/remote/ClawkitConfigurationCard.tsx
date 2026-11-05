@@ -1,4 +1,5 @@
 import { Link2, LogOut, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +27,8 @@ interface ClawkitConfigurationCardProps {
   onModelChange: (model: string) => void;
   onEndpointModeChange: (mode: CodexEndpointMode) => void;
   onCustomEndpointChange: (value: string) => void;
+  attachmentOptimization?: boolean;
+  onAttachmentOptimizationChange?: (enabled: boolean) => void;
   onConfigure: () => void;
   onRollback: () => void;
   onLogout: () => void;
@@ -47,6 +50,8 @@ export function ClawkitConfigurationCard({
   onModelChange,
   onEndpointModeChange,
   onCustomEndpointChange,
+  attachmentOptimization = true,
+  onAttachmentOptimizationChange,
   onConfigure,
   onRollback,
   onLogout,
@@ -106,6 +111,12 @@ export function ClawkitConfigurationCard({
           onCustomValueChange={onCustomEndpointChange}
           disabled={busy}
         />
+        {onAttachmentOptimizationChange && <div className="flex items-center justify-between gap-4 rounded-md border px-3 py-3">
+          <div><label htmlFor="attachment-optimization" className="text-sm font-medium">大附件优化</label>
+            <p className="text-xs text-muted-foreground">通过本地代理按需上传原图和 PDF，避免请求超过上游体积限制。临时私有链接，不降低画质；ClawKit 需保持运行。</p>
+          </div>
+          <Switch id="attachment-optimization" checked={attachmentOptimization} disabled={busy || !configured} onCheckedChange={onAttachmentOptimizationChange} />
+        </div>}
         <div className="flex items-center justify-between rounded-md border px-3 py-3">
           <div className="flex items-start gap-3">
             <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-500" />

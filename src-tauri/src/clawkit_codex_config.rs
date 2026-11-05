@@ -5,6 +5,7 @@ use toml_edit::{DocumentMut, Item, Table};
 
 #[path = "clawkit_codex_config_state.rs"]
 mod state;
+pub use state::ensure_attachment_route;
 
 use state::BackupCcSwitchState;
 pub use state::{apply, rollback};
@@ -78,8 +79,29 @@ impl FileSnapshot {
     }
 }
 
-pub fn status() -> ClawkitCodexConfigurationStatus {
-    status_from_home(&crate::codex_config::get_codex_config_dir())
+pub fn status(state: &crate::store::AppState) -> ClawkitCodexConfigurationStatus {
+    let mut status = status_from_home(&crate::codex_config::get_codex_config_dir());
+    let app = crate::app_config::AppType::Codex;
+    if crate::mode::current::provider_for(&state.db, &app, crate::mode::current::Purpose::InUse).ok().flatten().as_deref() == Some(PROVIDER_ID)
+    {
+        if let Ok(Some(provider)) = state.db.get_provider_by_id(PROVIDER_ID, "codex") {
+            if let Some(config) = provider
+                .settings_config
+                .get("config")
+                .and_then(serde_json::Value::as_str)
+            {
+                if let Ok(doc) = config.parse::<DocumentMut>() {
+                    let upstream = selected_provider_value(&doc, "base_url").map(str::to_string);
+                    let live_base = std::fs::read_to_string(&status.config_path).ok().and_then(|s|s.parse::<DocumentMut>().ok()).and_then(|d|selected_provider_value(&d,"base_url").map(str::to_string));
+                    let selected = crate::mode::current::is_proxy(&app) || live_base == upstream;
+                    status.base_url = upstream;
+                    status.configured = selected && selected_provider_value(&doc, "experimental_bearer_token").is_some_and(|s|!s.is_empty())
+                        && !status.models.is_empty();
+                }
+            }
+        }
+    }
+    status
 }
 
 pub fn model_options(
@@ -398,6 +420,11 @@ fn provider_value<'a>(doc: &'a DocumentMut, key: &str) -> Option<&'a str> {
         .and_then(Item::as_table)
         .and_then(|provider| provider.get(key))
         .and_then(Item::as_str)
+}
+
+fn selected_provider_value<'a>(doc: &'a DocumentMut, key: &str) -> Option<&'a str> {
+    let selected = doc.get("model_provider").and_then(Item::as_str)?;
+    doc.get("model_providers")?.as_table()?.get(selected)?.as_table()?.get(key)?.as_str()
 }
 
 fn managed_config_text(

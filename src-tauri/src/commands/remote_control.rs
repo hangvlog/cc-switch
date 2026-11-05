@@ -92,8 +92,9 @@ pub fn get_codex_remote_status(
 
 #[tauri::command]
 pub fn get_clawkit_codex_configuration_status(
+    state: State<'_, crate::store::AppState>,
 ) -> crate::clawkit_codex_config::ClawkitCodexConfigurationStatus {
-    crate::clawkit_codex_config::status()
+    crate::clawkit_codex_config::status(state.inner())
 }
 
 #[tauri::command]
@@ -156,7 +157,10 @@ pub async fn start_codex_remote_server(
         }
     }
 
-    let configuration = crate::clawkit_codex_config::status();
+    let app_state = app
+        .try_state::<crate::store::AppState>()
+        .ok_or("应用状态不可用")?;
+    let configuration = crate::clawkit_codex_config::status(app_state.inner());
     if !configuration.configured {
         return Err("请先完成 Codex 一键配置".to_string());
     }
@@ -449,4 +453,53 @@ mod tests {
         assert_eq!(status.summary, "ClawKit Codex 增强层已就绪");
         assert!(!marker.exists());
     }
+}
+
+#[tauri::command]
+pub async fn set_clawkit_attachment_optimization(
+    app: AppHandle,
+    enabled: bool,
+) -> Result<bool, String> {
+    let state = app
+        .try_state::<crate::store::AppState>()
+        .ok_or("应用状态不可用")?;
+    let previous = crate::settings::get_settings();
+    if enabled
+        && state
+            .db
+            .get_provider_by_id("clawkit", "codex")
+            .map_err(|e| e.to_string())?
+            .is_none()
+    {
+        return Err("请先完成 ClawKit 模型服务配置".into());
+    }
+    if enabled {
+        let status = crate::clawkit_codex_config::status(state.inner());
+        if !status
+            .base_url
+            .as_deref()
+            .is_some_and(|u| crate::proxy::attachment_offload::endpoint(u).is_some())
+        {
+            return Err("大附件优化仅支持 ClawKit 模型服务地址".into());
+        }
+    }
+    let mut settings = previous.clone();
+    settings.attachment_offload_enabled = enabled;
+    crate::settings::update_settings(settings).map_err(|e| e.to_string())?;
+    let result = if enabled {
+        crate::mode::controller::enter_with_route(
+            state.inner(),
+            &crate::app_config::AppType::Codex,
+            false,
+            Some("clawkit"),
+        )
+        .await
+    } else {
+        Ok(())
+    };
+    if let Err(error) = result {
+        let _ = crate::settings::update_settings(previous);
+        return Err(error);
+    }
+    Ok(enabled)
 }

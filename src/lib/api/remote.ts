@@ -72,6 +72,7 @@ export const remoteApi = {
       selectedModel: selectedModel || null,
       baseUrl: baseUrl || null,
     }),
+  attachmentOptimization: (enabled: boolean) => invoke<boolean>("set_clawkit_attachment_optimization", { enabled }),
   uploadDiagnosticBundle: () =>
     invoke<DiagnosticBundleUpload>("upload_clawkit_diagnostic_bundle"),
   rollbackConfiguration: () =>

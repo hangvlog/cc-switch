@@ -126,10 +126,12 @@ async fn one_click_setup_replaces_custom_current_and_survives_route_restart() {
 
     let live = std::fs::read_to_string(codex_home.join("config.toml"))
         .expect("read configured Live config");
-    assert!(live.contains(r#"model_provider = "clawkit""#), "{live}");
-    assert!(
-        live.contains(r#"base_url = "https://api.clawkit.chat/v1""#),
-        "{live}"
+    assert!(live.contains("127.0.0.1"), "{live}");
+    let status = super::status(&state);
+    assert!(status.configured);
+    assert_eq!(
+        status.base_url.as_deref(),
+        Some("https://api.clawkit.chat/v1")
     );
     assert!(live.contains("[desktop]"), "{live}");
     assert_eq!(
@@ -150,16 +152,13 @@ async fn one_click_setup_replaces_custom_current_and_survives_route_restart() {
         stored.meta.and_then(|meta| meta.api_format).as_deref(),
         Some("openai_responses")
     );
-    assert_eq!(codex_mode(&state), "direct");
+    assert_eq!(codex_mode(&state), "route");
 
     crate::mode::controller::startup(&state).await;
     let after_restart = std::fs::read_to_string(codex_home.join("config.toml"))
         .expect("read Live config after restart");
-    assert!(
-        after_restart.contains(r#"model_provider = "clawkit""#),
-        "{after_restart}"
-    );
-    assert_eq!(codex_mode(&state), "direct");
+    assert!(after_restart.contains("127.0.0.1"), "{after_restart}");
+    assert_eq!(codex_mode(&state), "route");
 
     let rolled_back = rollback(&state).await.expect("rollback one-click setup");
     assert!(!rolled_back.configured);
@@ -272,4 +271,35 @@ async fn file_only_setup_is_missing_from_list_until_provider_sync_and_reconfigur
         db.get_current_provider("codex").unwrap().as_deref(),
         Some(PROVIDER_ID)
     );
+    crate::mode::controller::exit(&state, &AppType::Codex)
+        .await
+        .unwrap();
+    assert_eq!(codex_mode(&state), "direct");
+    super::ensure_attachment_route(&state).await.unwrap();
+    assert_eq!(
+        codex_mode(&state),
+        "direct",
+        "custom endpoint must stay direct"
+    );
+    apply(
+        &gateway,
+        &state,
+        Some("model-b"),
+        Some("https://api.clawkit.chat/v1"),
+    )
+    .await
+    .unwrap();
+    crate::mode::controller::exit(&state, &AppType::Codex)
+        .await
+        .unwrap();
+    assert_eq!(codex_mode(&state), "direct");
+    super::ensure_attachment_route(&state).await.unwrap();
+    assert_eq!(
+        codex_mode(&state),
+        "route",
+        "managed ClawKit upgrades enter the attachment route"
+    );
+    super::ensure_attachment_route(&state).await.unwrap();
+    assert_eq!(codex_mode(&state), "route");
+    stop_proxy(&state).await;
 }

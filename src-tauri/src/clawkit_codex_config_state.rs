@@ -127,6 +127,32 @@ pub async fn apply(
         .await;
     }
 
+    drop(switch_guard);
+    if crate::settings::get_settings().attachment_offload_enabled
+        && configured
+            .base_url
+            .as_deref()
+            .is_some_and(|u| crate::proxy::attachment_offload::endpoint(u).is_some())
+    {
+        if let Err(error) =
+            crate::mode::controller::enter_with_route(state, &app_type, false, Some(PROVIDER_ID))
+                .await
+        {
+            let guard = crate::mode::controller::lock_settled(state, &app_type)
+                .await
+                .map_err(|e| e.to_string())?;
+            return rollback_failed_apply(
+                error,
+                &home,
+                &backup_dir,
+                state,
+                &app_type,
+                &previous_state,
+                guard,
+            )
+            .await;
+        }
+    }
     Ok(configured)
 }
 
@@ -139,6 +165,9 @@ pub async fn rollback(state: &AppState) -> Result<ClawkitCodexConfigurationStatu
     let backup_dir =
         latest_backup_dir(&home).ok_or_else(|| "没有可恢复的 Codex 配置备份".to_string())?;
     let manifest = read_backup_manifest(&backup_dir)?;
+    if crate::mode::current::is_proxy(&app_type) {
+        crate::mode::controller::exit_locked(state, &app_type, false)?;
+    }
     restore_backup_files(&home, &backup_dir)?;
 
     if let Some(previous) = manifest.cc_switch_state.as_ref() {
@@ -155,6 +184,28 @@ pub async fn rollback(state: &AppState) -> Result<ClawkitCodexConfigurationStatu
 
     remove_backup_dir(&backup_dir)?;
     Ok(status_from_home(&home))
+}
+
+/// Upgrade only the existing managed ClawKit route. Never select another provider.
+pub async fn ensure_attachment_route(state: &AppState) -> Result<(), String> {
+    let app_type = AppType::Codex;
+    if !crate::settings::get_settings().attachment_offload_enabled
+        || crate::mode::current::is_proxy(&app_type)
+        || crate::mode::current::provider_for(&state.db, &app_type, crate::mode::current::Purpose::InUse).map_err(|e|e.to_string())?.as_deref() != Some(PROVIDER_ID)
+    {
+        return Ok(());
+    }
+    let status = super::status(state);
+    if status.configured
+        && status
+            .base_url
+            .as_deref()
+            .is_some_and(|u| crate::proxy::attachment_offload::endpoint(u).is_some())
+    {
+        crate::mode::controller::enter_with_route(state, &app_type, false, Some(PROVIDER_ID))
+            .await?;
+    }
+    Ok(())
 }
 
 fn capture_cc_switch_state(

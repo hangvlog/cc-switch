@@ -18,6 +18,8 @@ use super::ProxyError;
 /// - 其他错误：500 Internal Server Error
 pub fn map_proxy_error_to_status(error: &ProxyError) -> u16 {
     match error {
+        ProxyError::RequestBodyTooLarge(_) => 413,
+        ProxyError::AttachmentUpload(_) => 503,
         // 服务状态错误：与 IntoResponse 保持一致
         ProxyError::AlreadyRunning => 409,
         ProxyError::NotRunning => 503,

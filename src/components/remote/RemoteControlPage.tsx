@@ -39,6 +39,7 @@ export function RemoteControlPage() {
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [canRollback, setCanRollback] = useState(false);
+  const [attachmentOptimization, setAttachmentOptimization] = useState(true);
   const selectedEndpoint =
     endpointMode === "compatibility"
       ? COMPATIBILITY_CODEX_ENDPOINT
@@ -55,6 +56,7 @@ export function RemoteControlPage() {
   }, []);
 
   useEffect(() => {
+    void settingsApi.get().then(s => setAttachmentOptimization(s.attachmentOffloadEnabled ?? true)).catch(() => null);
     void remoteAccountApi
       .status()
       .then((status) => {
@@ -220,6 +222,13 @@ export function RemoteControlPage() {
           models={availableModels}
           busy={configurationBusy}
           modelsLoading={modelsLoading}
+          attachmentOptimization={attachmentOptimization}
+          onAttachmentOptimizationChange={(enabled) => {
+            setConfigurationBusy(true);
+            void remoteApi.attachmentOptimization(enabled).then(setAttachmentOptimization)
+              .catch(error => toast.error(extractErrorMessage(error)))
+              .finally(() => setConfigurationBusy(false));
+          }}
           canRollback={canRollback}
           onModelChange={setSelectedModel}
           onEndpointModeChange={setEndpointMode}
