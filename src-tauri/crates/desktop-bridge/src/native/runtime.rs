@@ -6,19 +6,36 @@ use std::{
     collections::HashMap,
     io::{BufReader, Write},
     path::{Path, PathBuf},
-    process::{ChildStdin, Command, Stdio},
+    process::Command,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc, Arc, Mutex,
     },
     time::Duration,
 };
+#[cfg(not(unix))]
+use std::process::{ChildStdin, Stdio};
 type Pending = Arc<Mutex<HashMap<String, mpsc::SyncSender<Value>>>>;
-type Input = Arc<Mutex<Option<ChildStdin>>>;
+#[cfg(not(unix))]
+type EngineInput = ChildStdin;
+#[cfg(unix)]
+type EngineInput = std::fs::File;
+type Input = Arc<Mutex<Option<EngineInput>>>;
 type DesktopOutput = Arc<Mutex<std::io::Stdout>>;
 type EventState = Arc<Mutex<super::events::Events>>;
 
 pub fn maybe_run_adapter() {
+    #[cfg(unix)]
+    if std::env::args().nth(1).as_deref() == Some("--clawkit-engine-relay") {
+        let result = std::env::args_os().nth(2).map(PathBuf::from)
+            .filter(|home| home.is_absolute())
+            .ok_or_else(|| "远控收发目录无效".to_owned())
+            .and_then(|home| {
+                let (input, output) = super::sidecar::inherited()?;
+                run_relay(input, output, &home)
+            });
+        std::process::exit(if result.is_ok() { 0 } else { 2 });
+    }
     // The GUI and service inherit login-session variables too. They must never
     // be mistaken for a Codex CLI invocation after ordinary-launch opt-in.
     if std::env::args().nth(1).is_none_or(|arg| arg.starts_with("--clawkit-") || arg.starts_with("-psn_") || arg.contains("://") || ["--hidden", "--minimized", "--silent"].contains(&arg.as_str())) {
@@ -104,29 +121,42 @@ fn send(input: &Input, bytes: &[u8]) -> Result<(), String> {
 }
 
 
+#[cfg(unix)]
+fn run(command: Command, home: &Path) -> Result<i32, String> {
+    super::sidecar::launch(command, home)
+}
+
+#[cfg(not(unix))]
 fn run(mut command: Command, home: &Path) -> Result<i32, String> {
+    let mut engine = command.stdin(Stdio::piped()).stdout(Stdio::piped())
+        .stderr(Stdio::inherit()).spawn().map_err(|e| e.to_string())?;
+    let input = engine.stdin.take().ok_or("没有引擎输入")?;
+    let output = engine.stdout.take().ok_or("没有引擎输出")?;
+    run_relay(input, output, home)?;
+    Ok(engine.wait().map_err(|e| e.to_string())?.code().unwrap_or(1))
+}
+
+fn run_relay(input: EngineInput, output: impl std::io::Read + Send + 'static, home: &Path) -> Result<(), String> {
     let (listener, _lock, socket) = match bind(home) {
         Ok(bound) => bound,
         Err(_) => {
-            // Optional remote creation must never prevent the original desktop from opening.
-            eprintln!("ClawKit native endpoint unavailable; starting the original desktop engine");
-            return Ok(fallback(&mut command));
+            // Even when optional remote access is unavailable, preserve both byte streams.
+            eprintln!("ClawKit native endpoint unavailable; original engine continues without remote access");
+            std::thread::spawn(move || {
+                let _ = std::io::copy(&mut std::io::stdin(), &mut { input });
+            });
+            std::io::copy(&mut { output }, &mut std::io::stdout()).map_err(|e| e.to_string())?;
+            return Ok(());
         }
     };
-    let mut engine = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let input = Arc::new(Mutex::new(engine.stdin.take()));
-    let output = engine.stdout.take().ok_or("没有引擎输出")?;
+    let input = Arc::new(Mutex::new(Some(input)));
     let ready = Arc::new(AtomicBool::new(false));
     let init_id = Arc::new(Mutex::new(None::<Value>));
     let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
     let prefix = format!("clawkit-native-{}-", uuid::Uuid::new_v4());
     let events = Arc::new(Mutex::new(super::events::Events::open(home)));
     let desktop_output = Arc::new(Mutex::new(std::io::stdout()));
+    let (completed, completion) = mpsc::sync_channel(1);
     {
         let (input, ready, init_id) = (input.clone(), ready.clone(), init_id.clone());
         let events = events.clone();
@@ -196,6 +226,7 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
             }
             ready.store(false, Ordering::SeqCst);
             pending.lock().unwrap().clear();
+            let _ = completed.send(());
         });
     }
     {
@@ -224,9 +255,9 @@ fn run(mut command: Command, home: &Path) -> Result<i32, String> {
             }
         });
     }
-    let status = engine.wait().map_err(|e| e.to_string())?;
+    let _ = completion.recv();
     super::endpoint::cleanup(&socket);
-    Ok(status.code().unwrap_or(1))
+    Ok(())
 }
 
 fn serve(

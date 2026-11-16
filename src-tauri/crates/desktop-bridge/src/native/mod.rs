@@ -9,6 +9,8 @@ pub(crate) mod responses;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 mod runtime;
+#[cfg(unix)]
+mod sidecar;
 mod transport;
 #[cfg(unix)]
 #[path="endpoint_unix.rs"]
