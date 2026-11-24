@@ -53,7 +53,7 @@ vi.mock("@/lib/api/remote", () => ({
 }));
 vi.mock("@/lib/clipboard", () => ({ copyText: mocks.copyText }));
 vi.mock("@/lib/api/settings", () => ({
-  settingsApi: { openExternal: mocks.openExternal },
+  settingsApi: { get: vi.fn().mockResolvedValue({ attachmentOffloadEnabled: true }), openExternal: mocks.openExternal },
 }));
 vi.mock("@/lib/api/remoteAccount", () => ({
   remoteAccountApi: {
@@ -255,7 +255,7 @@ describe("RemoteControlPage", () => {
     );
   });
 
-  it("offers HTTP by default and can apply the HTTPS endpoint", async () => {
+  it("defaults to the compatibility API and can apply the standard HTTPS endpoint", async () => {
     mocks.accountStatus.mockResolvedValue({
       status: "ok",
       authenticated: true,
@@ -268,11 +268,11 @@ describe("RemoteControlPage", () => {
     const selector = await screen.findByRole("combobox", {
       name: "模型服务地址",
     });
-    expect(selector).toHaveTextContent("兼容 HTTP（默认）");
+    expect(selector).toHaveTextContent("兼容模式 HTTPS（默认）");
     expect(screen.getByText(COMPATIBILITY_CODEX_ENDPOINT)).toBeInTheDocument();
 
     await user.click(selector);
-    await user.click(await screen.findByRole("option", { name: "安全 HTTPS" }));
+    await user.click(await screen.findByRole("option", { name: "标准 HTTPS" }));
     await user.click(screen.getByRole("button", { name: "立即一键配置" }));
 
     await waitFor(() =>

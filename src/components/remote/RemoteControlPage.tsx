@@ -9,8 +9,7 @@ import {
 import { AccountLoginCard } from "@/components/remote/AccountLoginCard";
 import { ClawkitConfigurationCard } from "@/components/remote/ClawkitConfigurationCard";
 import {
-  COMPATIBILITY_CODEX_ENDPOINT,
-  SECURE_CODEX_ENDPOINT,
+  selectedCodexEndpoint,
   endpointModeFor,
   type CodexEndpointMode,
 } from "@/components/remote/CodexEndpointSelector";
@@ -40,12 +39,7 @@ export function RemoteControlPage() {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [canRollback, setCanRollback] = useState(false);
   const [attachmentOptimization, setAttachmentOptimization] = useState(true);
-  const selectedEndpoint =
-    endpointMode === "compatibility"
-      ? COMPATIBILITY_CODEX_ENDPOINT
-      : endpointMode === "secure"
-        ? SECURE_CODEX_ENDPOINT
-        : customEndpoint.trim();
+  const selectedEndpoint = selectedCodexEndpoint(endpointMode, customEndpoint);
 
   const restoreEndpointSelection = useCallback((baseUrl?: string) => {
     if (!baseUrl) return;

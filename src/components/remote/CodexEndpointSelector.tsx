@@ -8,10 +8,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-export const COMPATIBILITY_CODEX_ENDPOINT = "http://152.136.14.113:80/v1";
+export const COMPATIBILITY_CODEX_ENDPOINT = "https://api.clawkit.chat/v1/compat";
+export const LEGACY_HTTP_ENDPOINT = "http://152.136.14.113:80/v1";
 export const SECURE_CODEX_ENDPOINT = "https://api.clawkit.chat/v1";
 
-export type CodexEndpointMode = "compatibility" | "secure" | "custom";
+export type CodexEndpointMode = "compatibility" | "secure" | "http" | "custom";
+
+export function selectedCodexEndpoint(mode: CodexEndpointMode, custom: string): string {
+  switch (mode) {
+    case "compatibility": return COMPATIBILITY_CODEX_ENDPOINT;
+    case "secure": return SECURE_CODEX_ENDPOINT;
+    case "http": return LEGACY_HTTP_ENDPOINT;
+    case "custom": return custom.trim();
+  }
+}
 
 export function normalizeEndpointForComparison(value: string): string {
   return value.trim().replace(/\/+$/, "");
@@ -19,6 +29,7 @@ export function normalizeEndpointForComparison(value: string): string {
 
 export function endpointModeFor(value: string): CodexEndpointMode {
   const normalized = normalizeEndpointForComparison(value);
+  if (normalized === LEGACY_HTTP_ENDPOINT) return "http";
   if (
     normalized === COMPATIBILITY_CODEX_ENDPOINT ||
     normalized === "http://62.234.99.177:80/v1" ||
@@ -67,7 +78,7 @@ export function CodexEndpointSelector({
       <div>
         <div className="text-sm font-medium">模型服务地址</div>
         <div className="text-xs text-muted-foreground">
-          默认使用兼容 HTTP；若请求一直停留在“思考中”，可切换安全 HTTPS。
+          兼容模式保留用户图片。超过渠道张数限制时，优先替换重复或较早的历史工具图片。
         </div>
       </div>
       <Select
@@ -79,8 +90,9 @@ export function CodexEndpointSelector({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="compatibility">兼容 HTTP（默认）</SelectItem>
-          <SelectItem value="secure">安全 HTTPS</SelectItem>
+          <SelectItem value="compatibility">兼容模式 HTTPS（默认）</SelectItem>
+          <SelectItem value="secure">标准 HTTPS</SelectItem>
+          <SelectItem value="http">旧版 HTTP</SelectItem>
           <SelectItem value="custom">自定义地址</SelectItem>
         </SelectContent>
       </Select>
@@ -103,13 +115,9 @@ export function CodexEndpointSelector({
         </div>
       ) : null}
       <p className="break-all font-mono text-xs text-muted-foreground">
-        {mode === "compatibility"
-          ? COMPATIBILITY_CODEX_ENDPOINT
-          : mode === "secure"
-            ? SECURE_CODEX_ENDPOINT
-            : customValue || "尚未填写"}
+        {selectedCodexEndpoint(mode, customValue) || "尚未填写"}
       </p>
-      {mode === "compatibility" ? (
+      {mode === "http" ? (
         <p className="text-xs text-amber-600 dark:text-amber-400">
           HTTP 兼容模式不加密模型请求，仅在 HTTPS 无法连接的设备上使用。
         </p>

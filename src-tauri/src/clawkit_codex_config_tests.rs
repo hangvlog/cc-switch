@@ -163,6 +163,7 @@ fn empty_selection_keeps_the_preferred_sol_default() {
 
 #[test]
 fn empty_endpoint_selection_uses_the_compatibility_default() {
+    assert_eq!(DEFAULT_CODEX_API_BASE_URL, "https://api.clawkit.chat/v1/compat");
     assert_eq!(resolve_base_url(None).unwrap(), DEFAULT_CODEX_API_BASE_URL);
     assert_eq!(
         resolve_base_url(Some("   ")).unwrap(),

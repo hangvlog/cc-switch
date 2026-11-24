@@ -1160,6 +1160,10 @@ impl ProviderAdapter for CodexAdapter {
         // - 自定义前缀: https://xxx/openai (不添加 /v1，直接拼接)
 
         // 检查 base_url 是否已经包含 /v1
+        if base_trimmed == crate::clawkit_codex_config::DEFAULT_CODEX_API_BASE_URL {
+            let suffix = endpoint_trimmed.strip_prefix("v1/").unwrap_or(endpoint_trimmed);
+            return format!("{base_trimmed}/{suffix}");
+        }
         let already_has_v1 = base_trimmed.ends_with("/v1");
         let origin_only = is_origin_only_url(base_trimmed);
 
@@ -1675,7 +1679,11 @@ experimental_bearer_token = "sk-config-key"
 
     #[test]
     fn test_build_url() {
+        let compat = crate::clawkit_codex_config::DEFAULT_CODEX_API_BASE_URL;
         let adapter = CodexAdapter::new();
+        for path in ["/responses", "/v1/responses"] {
+            assert_eq!(adapter.build_url(compat, path), format!("{compat}/responses"));
+        }
         let url = adapter.build_url("https://api.openai.com/v1", "/responses");
         assert_eq!(url, "https://api.openai.com/v1/responses");
     }

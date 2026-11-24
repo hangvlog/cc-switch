@@ -275,6 +275,10 @@ pub fn build_models_url_candidates(
 
     let mut candidates: Vec<String> = Vec::new();
 
+    let compat = crate::clawkit_codex_config::DEFAULT_CODEX_API_BASE_URL;
+    if trimmed == compat || (is_full_url && trimmed.strip_prefix(compat).is_some_and(|tail| tail.starts_with('/'))) {
+        return Ok(vec![format!("{compat}/models")]);
+    }
     if is_full_url {
         if let Some(idx) = trimmed.find("/v1/") {
             candidates.push(format!("{}/v1/models", &trimmed[..idx]));
