@@ -16,6 +16,7 @@ mod dispatch;
 #[cfg(test)]
 mod creation_tests;
 mod file_uploads;
+mod forks;
 mod history;
 mod latest_message;
 mod ipc;
@@ -81,6 +82,7 @@ pub struct Bridge {
     home: PathBuf,
     search: search::Search,
     ledger: ledger::Ledger,
+    forks: forks::Forks,
     creations: creation::Creations,
     native_creations: native::creation::NativeCreations,
     queue: queue::Queue,
@@ -112,6 +114,7 @@ impl Bridge {
             ledger,
             creations: creation::Creations::open(storage)?,
             native_creations: native::creation::NativeCreations::open(queue_storage)?,
+            forks: forks::Forks::open(queue_storage)?,
             queue: queue::Queue::open(queue_storage)?,
             attachments: attachments::Attachments::open(queue_storage)?,
             search: search::Search::open(queue_storage)?,
@@ -177,7 +180,7 @@ impl Bridge {
         match method {
             "initialize" => { let event_ready=native::event_ready(&self.home); let owner_ready=version::can_send(&self.home); Ok(json!({"userAgent":"clawkit-desktop-owner/1", "clawkit":{
                 "mode":"desktop-owner","protocolVersion":1,"history":"snapshot","pollIntervalMs":8000,
-                "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,"ownerStream":!event_ready&&owner_ready,
+                "notifications":true,"readState":cfg!(any(unix,windows)),"conditionalRead":true,"threadStatuses":true,"userMessageSearch":true,"historyPaging":true,"passiveRead":true,"newThread":native::ready(&self.home),"threadFork":native::fork_ready(&self.home),"newThreadVia":"native-engine","eventStream":event_ready,"ownerStream":!event_ready&&owner_ready,
                 "taskFileRead":true,"imageRead":true,"imagePreview":true,"fileAttachments":true,"imageAttachments":true,"modelSelection":true,"clarifications":true,"messageQueue":true,"messageSteering":true,"interrupt":event_ready||owner_ready,"approvals":event_ready||owner_ready,
                 "claudeDesktop":self.claude.capability()}})) },
             "desktop/events/read" => {
@@ -284,6 +287,7 @@ impl Bridge {
             "desktop/clarification/answer" => self.answer(params),
             "desktop/turn/start" => if native::event_ready(&self.home) {self.native_start(params)} else {self.start(params)},
             "desktop/thread/create" => self.create(params),
+            "desktop/thread/fork" => self.fork_thread(params),
             "desktop/creation/read" => {
                 let id = request_id(params)?;
                 let project = native::creation::project_key(params)?;

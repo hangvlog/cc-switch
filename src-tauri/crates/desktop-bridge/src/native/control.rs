@@ -8,35 +8,46 @@ impl Bridge {
     }
 
     pub(crate) fn native_subscribe(&self, thread: &str) -> Result<Value,String> {
-        self.native_subscribe_page(thread, false)
+        let mut result = native::request(&self.home, "thread/resume", json!({
+            "threadId":thread, "excludeTurns":true,
+            "initialTurnsPage":{"limit":1,"itemsView":"notLoaded","sortDirection":"desc"}
+        }))?;
+        if result["thread"]["id"] != thread { return Err("电脑返回了不同的对话".into()); }
+        let recent = result.as_object_mut().and_then(|r|r.remove("initialTurnsPage"))
+            .and_then(|mut p|p["data"].take().as_array().cloned()).ok_or("电脑缺少当前轮次状态")?;
+        result["thread"]["turns"] = json!(recent);
+        result["thread"]["streamPosition"] = result["_clawkitStream"].clone();
+        let pending = native::read_events(&self.home, json!({}))?;
+        let flags = &result["thread"]["status"]["activeFlags"];
+        result["pendingHumanRequest"] = json!(pending["pendingRequests"].as_array().into_iter().flatten()
+            .any(|r|r["params"]["threadId"]==thread) || flags.as_array().is_some_and(|a|!a.is_empty()));
+        self.native_reconcile(thread,&result["thread"])?;
+        result["queue"]=json!(self.queue.list(thread)?);
+        Ok(result)
     }
 
     pub(crate) fn native_subscribe_page(&self, thread: &str, latest_only: bool) -> Result<Value,String> {
-        let mut result=native::request(&self.home,"thread/resume",json!({"threadId":thread,"excludeTurns":true,
-            "initialTurnsPage":{"limit":if latest_only {1}else{30},"itemsView":"full","sortDirection":"desc"}}))?;
-        result["thread"]["historyCursor"]=result["initialTurnsPage"]["nextCursor"].as_str().map(|c|json!(format!("engine:{c}"))).unwrap_or(Value::Null);
-        if let Some(turns)=result["initialTurnsPage"]["data"].as_array() {
-            let mut turns=turns.clone(); turns.reverse(); result["thread"]["turns"]=json!(turns);
-        }
-        result["thread"]["streamPosition"]=result["_clawkitStream"].clone();
-        let pending=native::read_events(&self.home,json!({}))?;
-        result["pendingHumanRequest"]=json!(pending["pendingRequests"].as_array().into_iter().flatten().any(|r|r["params"]["threadId"]==thread));
-        self.native_reconcile(thread,&result["thread"])?;
-        result["queue"]=json!(self.queue.list(thread)?);
-        self.project_native_items(&mut result["thread"]);
-        // The page was copied into thread.turns above. Do not send a second,
-        // unprojected copy of tool scripts in the engine response envelope.
-        result.as_object_mut().unwrap().remove("initialTurnsPage");
-        if latest_only {
-            crate::latest_message::compact(&mut result["thread"]);
-            if !result["thread"]["turns"].as_array().into_iter().flatten().any(|t|t["items"].as_array().is_some_and(|i|!i.is_empty())) {
-                if let Ok(saved)=crate::saved_history::read_page(&self.home,thread,None,false,&self.attachments,1) {
-                    let mut turns=saved["thread"]["turns"].as_array().cloned().unwrap_or_default();
-                    turns.extend(result["thread"]["turns"].as_array().into_iter().flatten().cloned());
-                    result["thread"]["turns"]=json!(turns);
-                }
+        let mut result = self.native_subscribe(thread)?;
+        let active = result["thread"]["turns"][0].clone();
+        let active_id = active["id"].as_str().filter(|_|active["status"]=="inProgress");
+        let (mut turns, questions) = super::history_index::latest(&self.home, thread, active_id).unwrap_or_default();
+        if turns.is_empty() || !latest_only {
+            if let Ok(saved) = crate::saved_history::read_page(&self.home,thread,None,false,&self.attachments,if latest_only {1} else {20}) {
+                turns = saved["thread"]["turns"].as_array().cloned().unwrap_or(turns);
+                result["thread"]["historyCursor"] = saved["thread"]["historyCursor"].clone();
             }
+        } else {
+            let mut visible = json!({"turns":turns});
+            self.project_native_items(&mut visible);
+            turns = std::mem::take(visible["turns"].as_array_mut().unwrap());
         }
+        for turn in &mut turns {
+            if turn["id"] == active["id"] { turn["status"] = active["status"].clone(); }
+        }
+        if active_id.is_some() && !turns.iter().any(|t| t["id"]==active["id"]) { turns.push(active); }
+        result["thread"]["turns"]=json!(turns);
+        result["thread"]["asyncQuestions"]=json!(questions);
+        if latest_only { crate::latest_message::compact(&mut result["thread"]); }
         Ok(result)
     }
 
@@ -56,7 +67,7 @@ impl Bridge {
 
     pub(crate) fn native_reconcile(&self, thread: &str, state: &Value) -> Result<(),String> {
         for id in self.ledger.unresolved(thread)? {
-            if state["turns"].as_array().into_iter().flatten()
+            if super::history_index::contains_message(&self.home, thread, &id) || state["turns"].as_array().into_iter().flatten()
                 .flat_map(|v|v["items"].as_array().into_iter().flatten())
                 .any(|v|v["type"]=="userMessage" && (v["clientId"]==id || v["id"]==id)) {
                 self.ledger.mark(&id,"accepted")?;
@@ -65,9 +76,18 @@ impl Bridge {
         Ok(())
     }
 
+    pub(crate) fn native_answer(&self,params:&Value,text:&str,turn:&str)->Result<Value,String> {
+        let args=json!({"threadId":params["threadId"],"requestId":params["requestId"],"text":text});
+        self.send_checked(&args,true,Some(turn))
+    }
+
     pub(crate) fn native_start(&self, params:&Value)->Result<Value,String> { self.native_send(params,true) }
 
     pub(crate) fn native_send(&self, params:&Value, steer:bool)->Result<Value,String> {
+        self.send_checked(params,steer,None)
+    }
+
+    fn send_checked(&self, params:&Value, steer:bool, expected:Option<&str>)->Result<Value,String> {
         let object=params.as_object().ok_or("发送参数无效")?;
         if object.keys().any(|k|!["threadId","requestId","text","images","files"].contains(&k.as_str())) {
             return Err("不能覆盖原任务的权限或模型配置".into());
@@ -78,11 +98,10 @@ impl Bridge {
         let identity=message.identity();
         if let Some(receipt)=self.ledger.existing(id,thread,&identity)? {return Ok(receipt);}
         let current=self.native_subscribe(thread)?;
-        let pending=native::read_events(&self.home,json!({}))?;
-        if pending["pendingRequests"].as_array().into_iter().flatten().any(|r|r["params"]["threadId"]==thread) {
-            return Err("请先处理此任务的审批或问题".into());
-        }
+        if current["pendingHumanRequest"] == true {return Err("请先处理此任务的审批或问题".into());}
         let active=current["thread"]["turns"].as_array().into_iter().flatten().rev().find(|t|t["status"]=="inProgress");
+        if current["thread"]["status"]["type"]=="active" && active.is_none() { return Err("电脑正在切换执行轮次，请刷新后发送".into()); }
+        if expected.is_some_and(|id|active.and_then(|t|t["id"].as_str())!=Some(id)) {return Err("问题所属轮次已结束，请刷新".into());}
         if active.is_some() && !steer {return Err("任务仍在执行，继续等待队列".into());}
         let input=self.attachments.input(&message)?;
         if let Some(receipt)=self.ledger.begin(id,thread,&identity)? {return Ok(receipt);}
@@ -93,7 +112,11 @@ impl Bridge {
             Some(turn)=>("turn/steer",json!({"threadId":thread,"expectedTurnId":turn["id"],"input":input,"clientUserMessageId":id})),
             None=>("turn/start",json!({"threadId":thread,"input":input,"clientUserMessageId":id})),
         };
-        let status=if native::request(&self.home,method,args).is_ok(){"accepted"}else{"unknown"};
+        let status=match native::request_outcome(&self.home,method,args) {
+            Ok(value) if value["turn"]["id"].is_string() || value["turnId"].is_string() => "accepted",
+            Err(error) if error.definite => { self.ledger.mark(id,"rejected")?;return Ok(json!({"status":"rejected","reason":error.message})); }
+            _ => "unknown",
+        };
         self.ledger.mark(id,status)?;
         self.ledger.read(id,thread)
     }

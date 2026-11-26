@@ -2,6 +2,7 @@
 //! The desktop retains its connection; human replies are arbitrated by the adapter.
 pub(crate) mod creation;
 mod control;
+pub(crate) mod history_index;
 pub(crate) mod output;
 mod events;
 mod reminders;
@@ -55,6 +56,14 @@ pub fn ready(home: &Path) -> bool {
 }
 
 pub(crate) fn request(home: &Path, method: &str, params: Value) -> Result<Value, String> {
+    request_outcome(home,method,params).map_err(|e|e.message)
+}
+
+pub(crate) fn fork_ready(home:&Path)->bool {
+    request(home,"clawkit/status",json!({})).is_ok_and(|s|s["ready"]==true && s["threadFork"]==true)
+}
+
+pub(crate) fn request_outcome(home:&Path,method:&str,params:Value)->Result<Value,transport::Failure> {
     transport::request(&socket_path(home), method, params)
 }
 
@@ -75,6 +84,7 @@ fn allowed(method: &str, params: &Value) -> bool {
         "model/list" => &["includeHidden", "cursor", "limit"],
         "project/list" => &["cursor", "limit"],
         "project/read" => &["projectId"],
+        "thread/fork" => &["threadId","lastTurnId","beforeTurnId","deferGoalContinuation","excludeTurns"],
         "thread/start" => &["projectId", "cwd"],
         "turn/start" => &["threadId", "clientUserMessageId", "input"],
         "thread/read" => &["threadId", "includeTurns"],

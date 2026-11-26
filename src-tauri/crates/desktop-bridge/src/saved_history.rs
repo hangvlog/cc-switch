@@ -178,6 +178,7 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
     let mut items = vec![];
     let mut budget = 160000;
     let mut seen = std::collections::HashSet::new();
+    let history_index = crate::native::history_index::open(&home).ok();
     let latest_pair = limit == 1 && !users_only;
     for line in bytes[boundary..].split_inclusive(|b| *b == b'\n').rev() {
         let line_end = position;
@@ -189,7 +190,7 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
         let Ok(event) = serde_json::from_slice::<Value>(line) else {
             continue;
         };
-        if let Some(item) = visible(&event, thread, position, line_end, attachments) {
+        if let Some(mut item) = visible(&event, thread, position, line_end, attachments) {
             if users_only && item["type"] != "userMessage" {
                 continue;
             }
@@ -206,6 +207,9 @@ pub fn read_page(home: &Path, thread: &str, cursor: Option<&str>, users_only: bo
                 break;
             }
             budget = budget.saturating_sub(cost);
+            if let Some(turn)=history_index.as_ref().and_then(|db|crate::native::history_index::anchor(db,thread,item["id"].as_str().unwrap_or(""),position)) {
+                item["sourceTurnId"]=json!(turn);
+            }
             items.push(item);
             if (latest_pair && query) || (!latest_pair && items.len() >= limit.clamp(1, 20)) {
                 next = position;

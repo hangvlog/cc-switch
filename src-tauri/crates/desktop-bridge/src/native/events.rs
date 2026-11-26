@@ -146,7 +146,7 @@ impl Events {
     /// Called under the same lock as the engine write, so desktop/mobile compete atomically.
     pub fn resolve(&mut self, id: &Value) {
         let key = id.to_string();
-        if self.pending.remove(&key).is_some() {
+        if let Some(original) = self.pending.remove(&key) {
             if let Some(reminder) = self.request_reminders.remove(&key) {
                 for event in &mut self.reminders { if event["id"]==reminder { event["resolved"]=json!(true); } }
                 if let Some(store)=&self.reminder_store { let _=store.resolve(&reminder); }
@@ -155,7 +155,7 @@ impl Events {
             while self.answered_order.len() > MAX_EVENTS {
                 if let Some(key) = self.answered_order.pop_front() { self.answered.remove(&key); }
             }
-            self.push(json!({"method":"serverRequest/resolved","params":{"requestId":id}}));
+            self.push(json!({"method":"serverRequest/resolved","params":{"requestId":id,"threadId":original["params"]["threadId"]}}));
         }
     }
 

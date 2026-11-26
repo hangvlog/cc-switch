@@ -286,7 +286,7 @@ fn serve(
     let response = if !super::allowed(method, &value["params"]) {
         json!({"error":{"code":-32601}})
     } else if method == "clawkit/status" {
-        json!({"result":{"ready":connected,"protocolVersion":1,"eventProtocolVersion":1,"engineInstanceId":events.lock().unwrap().epoch}})
+        json!({"result":{"ready":connected,"protocolVersion":1,"eventProtocolVersion":1,"threadFork":true,"engineInstanceId":events.lock().unwrap().epoch}})
     } else if !connected {
         json!({"error":{"code":-32001}})
     } else if method == "clawkit/notifications/read" {
@@ -301,7 +301,7 @@ fn serve(
                 state.resolve(&response["id"]);
                 match send(input, &serde_json::to_vec(&response).map_err(|e| e.to_string())?) {
                     Ok(()) => {
-                        let notification=json!({"method":"serverRequest/resolved","params":{"requestId":response["id"]}});
+                        let notification=json!({"method":"serverRequest/resolved","params":{"requestId":response["id"],"threadId":value["params"]["threadId"]}});
                         if let Ok(mut writer)=desktop_output.lock() {
                             let _=writeln!(writer,"{notification}").and_then(|_|writer.flush());
                         }
@@ -325,9 +325,9 @@ fn serve(
         pending.lock().unwrap().remove(&id);
         result.unwrap_or_else(|_| json!({"error":{"code":-32002}}))
     };
-    let bytes = serde_json::to_vec(&response).map_err(|e| e.to_string())?;
-    if bytes.len() > RESPONSE_LIMIT {
-        return Err("响应过大".into());
+    let mut bytes = serde_json::to_vec(&response).map_err(|e| e.to_string())?;
+    if bytes.len() >= RESPONSE_LIMIT {
+        bytes = br#"{"error":{"code":-32004}}"#.to_vec();
     }
     stream
         .write_all(&bytes)

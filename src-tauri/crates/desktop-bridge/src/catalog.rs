@@ -55,7 +55,8 @@ pub fn page(home: &Path, offset: usize, limit: usize, lightweight: bool) -> Resu
     };
     let transcript = if columns.iter().any(|c|c=="rollout_path") { "t.rollout_path" } else { "NULL" };
     let thread_source = if columns.iter().any(|c|c=="thread_source") { "t.thread_source" } else { "NULL" };
-    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra},{transcript},{thread_source} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' ORDER BY {activity} DESC,t.id LIMIT ?2 OFFSET ?1");
+    let ordinary = if columns.iter().any(|c|c=="attached_thread_parent_id") {"AND t.attached_thread_parent_id IS NULL"} else {""};
+    let sql = format!("SELECT t.id,t.title,t.cwd,t.created_at,{activity},{extra},{transcript},{thread_source} FROM threads t WHERE t.archived=0 AND t.source NOT LIKE '%subAgent%' {ordinary} ORDER BY {activity} DESC,t.id LIMIT ?2 OFFSET ?1");
     let mut query = connection
         .prepare(&sql)
         .map_err(|_| "Codex 任务索引结构已变化")?;
@@ -75,6 +76,9 @@ pub fn page(home: &Path, offset: usize, limit: usize, lightweight: bool) -> Resu
         None
     };
     for thread in &mut data {
+        if let (Some(id),Some(path))=(thread["id"].as_str(),thread["_rollout"].as_str()) {
+            if let Some(parent)=crate::forks::parent(home,id,path) {thread["forkedFromId"]=json!(parent);}
+        }
         if !lightweight { if let (Some(id),Some(path))=(thread["id"].as_str(),thread["_rollout"].as_str()) {
             if let Some(activity)=crate::activity::read(home,id,path) {
                 thread["latestReply"]=activity["summary"].clone();
@@ -101,9 +105,11 @@ pub fn page(home: &Path, offset: usize, limit: usize, lightweight: bool) -> Resu
 pub fn verify_thread(home: &Path, thread: &str) -> Result<(), String> {
     uuid::Uuid::parse_str(thread).map_err(|_| "任务 ID 无效")?;
     let connection = connection(home)?;
+    let has_attached:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('threads') WHERE name='attached_thread_parent_id')",[],|r|r.get(0)).map_err(|e|e.to_string())?;
+    let condition=if has_attached {" AND attached_thread_parent_id IS NULL"} else {""};
     let eligible: bool = connection
         .query_row(
-            "SELECT archived=0 AND source NOT LIKE '%subAgent%' FROM threads WHERE id=?1",
+            &format!("SELECT archived=0 AND source NOT LIKE '%subAgent%' {condition} FROM threads WHERE id=?1"),
             [thread],
             |row| row.get(0),
         )

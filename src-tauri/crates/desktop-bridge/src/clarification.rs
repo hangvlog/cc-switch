@@ -87,6 +87,12 @@ fn validate(request: &Value, answers: &Value) -> Result<(), String> {
     }
     Ok(())
 }
+fn reply_text(request:&Value,answers:&Value)->Result<String,String> {
+    validate(request,answers)?;
+    let replies:Vec<_>=request["params"]["questions"].as_array().unwrap().iter().map(|q|
+        json!({"questionItemId":q["id"],"question":q["question"],"answer":answers[q["id"].as_str().unwrap()]["answers"][0]})).collect();
+    Ok(format!("<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",json!(replies)))
+}
 fn confirmed(state: &Value, request: &Value, answers: &Value) -> bool {
     history::turns(state)
         .iter()
@@ -106,6 +112,15 @@ impl Bridge {
         if !self.enabled.load(std::sync::atomic::Ordering::SeqCst) {
             return Err("远程连接已关闭".into());
         }
+        if params["questionRequestId"].as_str().is_some_and(|q|q.starts_with("async:")) && crate::native::event_ready(&self.home) {
+            let live = self.native_subscribe(thread)?;
+            let turn = &live["thread"]["turns"][0];
+            let active = turn["id"].as_str().filter(|_|turn["status"]=="inProgress").ok_or("该轮次已结束，请刷新问题")?;
+            let (_, requests) = crate::native::history_index::latest(&self.home, thread, Some(active)).map_err(|_|"暂时无法核对电脑上的问题")?;
+            let question = requests.iter().find(|q|q["requestId"]==params["questionRequestId"]).ok_or("问题已更新或已回答，请刷新对话")?;
+            let text = reply_text(question,&params["answers"])?;
+            return self.native_answer(params,&text,active);
+        }
         let mut client = IpcClient::connect(&self.home)?;
         let snapshot = client.snapshot(thread, None)?;
         if let Some(reason) = history::conversation_block_reason(&snapshot.state) {
@@ -120,11 +135,7 @@ impl Bridge {
         validate(request, answers)?;
         if request["method"] == "clawkit/asyncQuestions" {
             let id = crate::request_id(params)?;
-            let replies:Vec<_>=request["params"]["questions"].as_array().unwrap().iter().map(|q|json!({"questionItemId":q["id"],"question":q.get("question").or_else(||q.get("title")).unwrap_or(&Value::Null),"answer":answers[q["id"].as_str().unwrap()]["answers"][0]})).collect();
-            let text = format!(
-                "<send_user_message_question_reply>\n{}\n</send_user_message_question_reply>",
-                json!(replies)
-            );
+            let text=reply_text(request,answers)?;
             if let Some(old) = self.ledger.existing(id, thread, &text)? {
                 return Ok(old);
             }
