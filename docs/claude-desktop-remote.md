@@ -102,7 +102,15 @@ session (3.19.83):
   of sending into a hold. It does not assert `from-mode`: Claude documents
   that field as declared only by the host on local stdin.
 
-Sessions with no live process run one CLI turn as before.
+For each CLI turn the bridge passes an explicit `--model`. New sessions use
+the requested model, or the recent project selection if compatible with the
+applied desktop profile. Otherwise they use the first model in the profile,
+including its preferred 1M context. Phone-created sessions retain the model
+until the desktop imports them. An inactive session resumes using its recorded
+model when compatible, with the same profile default for older records.
+Profiles using discovery alone need an explicit model or a desktop session
+selection. A model chosen explicitly outside a configured list returns an
+error before a turn starts.
 
 Sessions created from the phone are kept in `claude-sessions.json` in the account
 storage directory and listed as `cli:<uuid>` until imported in the desktop app.

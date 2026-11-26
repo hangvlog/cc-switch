@@ -232,10 +232,10 @@ pub fn read_registry(paths: &Paths) -> Vec<Value> {
 }
 
 /// Sessions started from the phone are not in the desktop index until imported there.
-pub fn remember(paths: &Paths, cli_id: &str, cwd: &str, title: &str) -> Result<(), String> {
+pub fn remember(paths: &Paths, cli_id: &str, cwd: &str, model: &str, title: &str) -> Result<(), String> {
     let mut entries = read_registry(paths);
     entries.retain(|e| e["cliSessionId"] != cli_id);
-    entries.push(json!({"cliSessionId":cli_id,"cwd":cwd,"title":title,"createdAt":crate::now_ms()}));
+    entries.push(json!({"cliSessionId":cli_id,"cwd":cwd,"model":model,"title":title,"createdAt":crate::now_ms()}));
     let start = entries.len().saturating_sub(MAX_REGISTRY);
     if let Some(parent) = paths.registry.parent() {
         fs::create_dir_all(parent).map_err(|_| "无法保存 Claude 会话记录")?;
@@ -253,7 +253,7 @@ pub fn sessions(paths: &Paths, include_archived: bool) -> Vec<Session> {
     for entry in read_registry(paths) {
         let Some(cli_id) = entry["cliSessionId"].as_str().filter(|id| is_uuid(id) && !known.contains(*id)) else { continue };
         let raw = json!({"sessionId":format!("cli:{cli_id}"),"cliSessionId":cli_id,"cwd":entry["cwd"],
-            "title":entry["title"],"createdAt":entry["createdAt"],"lastActivityAt":entry["createdAt"]});
+            "model":entry["model"],"title":entry["title"],"createdAt":entry["createdAt"],"lastActivityAt":entry["createdAt"]});
         // A new session has no transcript until the CLI writes its first record.
         let fresh = crate::now_ms().saturating_sub(entry["createdAt"].as_u64().unwrap_or(0)) < 10 * 60 * 1000;
         if let Some(session) = session_from(paths, &raw, &live).filter(|s| s.transcript.is_some() || fresh) {

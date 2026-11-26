@@ -92,7 +92,7 @@ impl Claude {
         }
         let models = gateway::gateway(&self.paths)?.models;
         gateway::cli(&self.paths, None)?;
-        Ok(models)
+        Ok(models.into_iter().map(|m| m.name).collect())
     }
 
     pub fn capability(&self) -> Value {
@@ -237,17 +237,14 @@ impl Claude {
         Ok(json!({"thread":thread}))
     }
 
-    fn launch(&self, cwd: &str, session_args: [&str; 2], model: Option<&str>, mode: Option<&str>, pin: Option<&str>) -> Result<runner::Launch, String> {
-        let gateway = gateway::gateway(&self.paths)?;
+    fn launch(&self, gateway: &gateway::Gateway, cwd: &str, session_args: [&str; 2], model: &str, mode: Option<&str>, pin: Option<&str>) -> Result<runner::Launch, String> {
         let cli = gateway::cli(&self.paths, pin)?;
         let mut args: Vec<String> = ["-p", "--verbose", "--input-format", "stream-json", "--output-format", "stream-json",
             "--permission-prompt-tool", "stdio"].iter().map(|s| s.to_string()).collect();
         args.extend(session_args.iter().map(|s| s.to_string()));
-        if let Some(model) = model.filter(|m| !m.is_empty() && m.len() < 200) {
-            args.extend(["--model".into(), model.into()]);
-        }
+        args.extend(["--model".into(), model.into()]);
         args.extend(["--permission-mode".into(), permission_mode(mode).into()]);
-        Ok(runner::Launch { cli, cwd: PathBuf::from(cwd), env: gateway::child_env(&gateway), args })
+        Ok(runner::Launch { cli, cwd: PathBuf::from(cwd), env: gateway::child_env(gateway), args })
     }
 
     fn start(&self, params: &Value) -> Result<Value, String> {
@@ -266,7 +263,9 @@ impl Claude {
         if let Some(live) = session.live.as_ref() {
             return self.deliver(&session, live, id, &message.peer_text(id)?);
         }
-        let launch = self.launch(&session.cwd, ["--resume", &session.cli_id], session.model.as_deref(),
+        let gateway = gateway::gateway(&self.paths)?;
+        let model = gateway.select_model(None, session.model.as_deref())?;
+        let launch = self.launch(&gateway, &session.cwd, ["--resume", &session.cli_id], &model,
             session.permission_mode.as_deref(), session.cli_version.as_deref())?;
         self.turns.start(&self.events, &session.cli_id, &session.id, id, &message.content(), launch, None)
     }
@@ -305,11 +304,14 @@ impl Claude {
         if !sessions.iter().any(|s| s.cwd == cwd) || !Path::new(cwd).is_dir() {
             return Err("只能在电脑上已有 Claude 会话的项目目录里新建".into());
         }
-        let model = params["model"].as_str().map(String::from)
-            .or_else(|| sessions.iter().find(|s| s.cwd == cwd).and_then(|s| s.model.clone()));
+        let gateway = gateway::gateway(&self.paths)?;
+        let previous = sessions.iter().filter(|s| s.cwd == cwd && !s.archived).find_map(|s| s.model.as_deref());
+        let explicit = params.get("model").filter(|v| !v.is_null())
+            .map(|v| v.as_str().ok_or("模型名称必须为字符串")).transpose()?;
+        let model = gateway.select_model(explicit, previous)?;
         let cli_id = uuid::Uuid::new_v4().to_string();
-        let launch = self.launch(cwd, ["--session-id", &cli_id], model.as_deref(), Some("acceptEdits"), None)?;
-        index::remember(&self.paths, &cli_id, cwd, &projection::truncate(if message.text.is_empty() { "图片" } else { &message.text }, 60))?;
+        let launch = self.launch(&gateway, cwd, ["--session-id", &cli_id], &model, Some("acceptEdits"), None)?;
+        index::remember(&self.paths, &cli_id, cwd, &model, &projection::truncate(if message.text.is_empty() { "图片" } else { &message.text }, 60))?;
         // Only the desktop's index makes the session appear there; ask it to import
         // the transcript once this process has exited, so it never has two writers.
         let (paths, adopter, events) = (self.paths.clone(), self.adopter.clone(), self.events.clone());

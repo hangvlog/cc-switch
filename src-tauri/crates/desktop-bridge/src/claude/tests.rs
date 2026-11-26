@@ -253,3 +253,36 @@ fn resume_link_targets_only_session_ids() {
     assert_eq!(adopt::resume_url(CLI_ID).as_deref(), Some("claude://resume?session=747a8e82-3bed-4378-be99-80f2dcec6d9b"));
     assert!(adopt::resume_url("x&session=evil").is_none());
 }
+
+#[test]
+fn pins_a_desktop_model_for_phone_created_and_legacy_sessions() {
+    let f = fixture();
+    let library = f.root.path().join("Claude-3p/configLibrary");
+    let file = library.join("00000000-0000-4000-8000-000000157210.json");
+    let mut profile: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    profile["inferenceModels"] = json!([
+        {"name":"claude-fable-5","supports1m":true,"prefer1m":true}, "claude-sonnet-5"
+    ]);
+    fs::write(&file, profile.to_string()).unwrap();
+    let gateway = gateway::gateway(&f.claude.paths).unwrap();
+    for previous in [None, Some("unlisted-upstream-model")] {
+        assert_eq!(gateway.select_model(None, previous).unwrap(), "claude-fable-5[1m]");
+    }
+    assert_eq!(gateway.select_model(None, Some("claude-sonnet-5")).unwrap(), "claude-sonnet-5");
+    assert_eq!(gateway.select_model(Some("claude-fable-5"), None).unwrap(), "claude-fable-5");
+    assert!(gateway.select_model(Some("unlisted-model"), None).is_err());
+    assert!(gateway.select_model(Some("claude-sonnet-5[1m]"), None).is_err());
+
+    let receipt = f.claude.dispatch("claude/thread/create", &json!({
+        "requestId":uuid::Uuid::new_v4().to_string(), "cwd":f.cwd, "text":"test", "model":"claude-sonnet-5"
+    })).unwrap();
+    let session = index::resolve(&f.claude.paths, receipt["threadId"].as_str().unwrap()).unwrap();
+    assert_eq!(session.model.as_deref(), Some("claude-sonnet-5"));
+    f.claude.turns.interrupt(&session.cli_id).unwrap();
+
+    profile.as_object_mut().unwrap().remove("inferenceModels");
+    fs::write(&file, profile.to_string()).unwrap();
+    let discovery = gateway::gateway(&f.claude.paths).unwrap();
+    assert_eq!(discovery.select_model(None, Some("discovered-model")).unwrap(), "discovered-model");
+    assert!(discovery.select_model(None, None).is_err());
+}

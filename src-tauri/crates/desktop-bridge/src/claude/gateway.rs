@@ -14,7 +14,35 @@ use std::{
 pub struct Gateway {
     pub base_url: String,
     pub token: String,
-    pub models: Vec<String>,
+    pub models: Vec<Model>,
+}
+
+pub struct Model {
+    pub name: String,
+    supports_1m: bool,
+    prefer_1m: bool,
+}
+
+fn valid_model(name: &str) -> bool {
+    !name.is_empty() && name.len() < 200 && !name.starts_with('-') &&
+        !name.chars().any(|c| c.is_control() || c.is_whitespace())
+}
+
+impl Gateway {
+    /// Only the desktop profile and the selected session may choose the remote
+    /// model. Omitting --model would let unrelated CLI user settings win.
+    pub fn select_model(&self, explicit: Option<&str>, previous: Option<&str>) -> Result<String, String> {
+        let supported = |id: &str| valid_model(id) && (self.models.is_empty() ||
+            self.models.iter().any(|m| m.name == id || (m.supports_1m && id.strip_suffix("[1m]") == Some(&m.name))));
+        if let Some(id) = explicit {
+            return supported(id).then(|| id.to_owned()).ok_or_else(|| "选择的模型不在当前 Claude 桌面网关配置中或名称无效".into());
+        }
+        if let Some(id) = previous.filter(|id| supported(id)) {
+            return Ok(id.to_owned());
+        }
+        let first = self.models.first().ok_or("请先在 Claude 桌面端为此项目选择模型，或在网关配置中指定模型")?;
+        Ok(if first.prefer_1m { format!("{}[1m]", first.name) } else { first.name.clone() })
+    }
 }
 
 fn read_json(path: &Path) -> Option<Value> {
@@ -31,8 +59,15 @@ pub fn gateway(paths: &Paths) -> Result<Gateway, String> {
     }
     let base_url = profile["inferenceGatewayBaseUrl"].as_str().filter(|u| u.starts_with("http")).ok_or("网关地址缺失")?;
     let token = profile["inferenceGatewayApiKey"].as_str().filter(|t| !t.is_empty()).ok_or("网关凭据缺失")?;
-    let models = profile["inferenceModels"].as_array().into_iter().flatten()
-        .filter_map(|m| m["name"].as_str().map(Into::into)).collect();
+    let mut models = Vec::new();
+    if let Some(entries) = profile.get("inferenceModels") {
+        for item in entries.as_array().ok_or("Claude 桌面网关的模型列表无效")? {
+            let name = item.as_str().or_else(|| item["name"].as_str())
+                .filter(|name| valid_model(name)).ok_or("Claude 桌面网关的模型名称无效")?;
+            let supports_1m = item["supports1m"] == true;
+            models.push(Model { name: name.into(), supports_1m, prefer_1m: supports_1m && item["prefer1m"] == true });
+        }
+    }
     Ok(Gateway { base_url: base_url.into(), token: token.into(), models })
 }
 
