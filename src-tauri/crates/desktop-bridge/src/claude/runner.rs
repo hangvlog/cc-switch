@@ -98,7 +98,7 @@ impl Turns {
         self.receipts.lock().ok()?.iter().find(|(id, _)| id == request_id).map(|(_, v)| v.clone())
     }
 
-    pub fn start(&self, events: &ClaudeEvents, cli_id: &str, thread_id: &str, request_id: &str, text: &str, launch: Launch, after: Option<AfterExit>) -> Result<Value, String> {
+    pub fn start(&self, events: &ClaudeEvents, cli_id: &str, thread_id: &str, request_id: &str, content: &Value, launch: Launch, after: Option<AfterExit>) -> Result<Value, String> {
         let mut running = self.running.lock().map_err(|_| "执行状态不可用")?;
         if running.contains_key(cli_id) {
             return Err("这个会话正在执行，请等待完成或先停止".into());
@@ -108,7 +108,7 @@ impl Turns {
             .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
             .spawn().map_err(|_| "无法启动 Claude Code")?;
         let mut stdin = child.stdin.take().ok_or("无法连接 Claude 进程")?;
-        let message = json!({"type":"user","session_id":cli_id,"parent_tool_use_id":null,"message":{"role":"user","content":text}});
+        let message = json!({"type":"user","uuid":request_id,"session_id":cli_id,"parent_tool_use_id":null,"message":{"role":"user","content":content}});
         if writeln!(stdin, "{message}").and_then(|_| stdin.flush()).is_err() {
             let _ = child.kill();
             return Err("消息未能交给 Claude Code，未发送".into());

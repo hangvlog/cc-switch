@@ -97,6 +97,7 @@ pub fn user_text(content: &Value) -> Option<String> {
         return None;
     }
     let text: Vec<&str> = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str()).filter(|t| typed(t)).collect();
+    if text.is_empty() && blocks.iter().any(|b| b["type"] == "image") { return Some(String::new()); }
     (!text.is_empty()).then(|| text.join("\n"))
 }
 
@@ -106,7 +107,7 @@ const PEER_FOOTER: &str = "\n\nThis came from another Claude session";
 /// What you typed on the phone, delivered through the desktop session's inbox:
 /// a turn-starting `user` record (wrapped in the CLI's peer notice) or a
 /// `queued_command` attachment when it joined a running turn.
-fn phone_text(record: &Value) -> Option<String> {
+fn peer_body(record: &Value) -> Option<&str> {
     let (origin, text) = match record["type"].as_str() {
         Some("user") => (&record["origin"], record["message"]["content"].as_str()?),
         Some("attachment") if record["attachment"]["type"] == "queued_command" => (&record["attachment"]["origin"], record["attachment"]["prompt"].as_str()?),
@@ -119,7 +120,20 @@ fn phone_text(record: &Value) -> Option<String> {
         Some((_, rest)) => rest.split(PEER_FOOTER).next().unwrap_or(rest),
         None => text,
     };
-    Some(body.trim().to_string()).filter(|t| !t.is_empty())
+    Some(body.trim_end()).filter(|t| !t.is_empty())
+}
+
+fn phone_text(record: &Value) -> Option<String> {
+    let (text, ids, _) = super::message::peer_parts(peer_body(record)?);
+    Some(if text.trim().is_empty() && !ids.is_empty() { "图片".into() } else { text.trim().into() })
+}
+
+fn peer_item(record: &Value) -> Option<Value> {
+    let (text, images, client) = super::message::peer_parts(peer_body(record)?);
+    let mut content = Vec::new();
+    if !text.trim().is_empty() { content.push(json!({"type":"text","text":clip(text.trim(), MAX_TEXT)})); }
+    content.extend(images.into_iter().map(|id| json!({"type":"image","imageId":id})));
+    Some(json!({"type":"userMessage","id":record["uuid"],"clientId":client,"content":content}))
 }
 
 /// The text of a message you sent, if this record is one.
@@ -165,7 +179,10 @@ fn result_text(block: &Value) -> String {
 pub fn apply_message(items: &mut Vec<Value>, record_id: &str, role: &str, content: &Value) {
     if role == "user" {
         if let Some(text) = user_text(content) {
-            items.push(json!({"type":"userMessage","id":record_id,"content":[{"type":"text","text":clip(&text,MAX_TEXT)}]}));
+            let mut parts = Vec::new();
+            if !text.is_empty() { parts.push(json!({"type":"text","text":clip(&text,MAX_TEXT)})); }
+            parts.extend(super::message::history_images(content));
+            items.push(json!({"type":"userMessage","id":record_id,"content":parts}));
             return;
         }
     }
@@ -224,9 +241,8 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
     for record in active_chain(records) {
         if record["type"] == "attachment" {
             // A phone message that joined a running turn.
-            if let (Some(text), false) = (phone_text(record), turns.is_empty()) {
-                let id = record["uuid"].as_str().unwrap_or("");
-                items.push(json!({"type":"userMessage","id":id,"content":[{"type":"text","text":clip(&text,MAX_TEXT)}]}));
+            if !turns.is_empty() {
+                if let Some(item) = peer_item(record) { items.push(item); }
             }
             continue;
         }
@@ -251,8 +267,8 @@ pub fn project(records: &[Value], limit: usize, running_turn: Option<&str>) -> P
         if role == "user" && !starts_turn(record) && !record["message"]["content"].as_array().is_some_and(|b| b.iter().any(|b| b["type"] == "tool_result")) {
             continue;
         }
-        match phone_text(record) {
-            Some(text) => apply_message(&mut items, id, role, &Value::String(text)),
+        match peer_item(record) {
+            Some(item) => items.push(item),
             None => apply_message(&mut items, id, role, &record["message"]["content"]),
         }
         turns.last_mut().unwrap()["completedAt"] = json!(seconds(&record["timestamp"]));

@@ -106,6 +106,7 @@ impl Bridge {
         }
         let ledger = ledger::Ledger::open(storage)?;
         let enabled = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let attachments = attachments::Attachments::open(queue_storage)?;
         Ok(Self {
             owner_streams: owner_stream::OwnerStreams::new(enabled.clone()),
             output_storage: queue_storage.into(),
@@ -116,9 +117,9 @@ impl Bridge {
             native_creations: native::creation::NativeCreations::open(queue_storage)?,
             forks: forks::Forks::open(queue_storage)?,
             queue: queue::Queue::open(queue_storage)?,
-            attachments: attachments::Attachments::open(queue_storage)?,
+            attachments: attachments.clone(),
             search: search::Search::open(queue_storage)?,
-            claude: claude::Claude::open(queue_storage),
+            claude: claude::Claude::open(queue_storage, attachments),
             enabled,
         })
     }

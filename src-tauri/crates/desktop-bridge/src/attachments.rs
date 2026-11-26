@@ -8,6 +8,7 @@ use std::{
     path::{Path, PathBuf},
 };
 const MAX: usize = 5 * 1024 * 1024;
+#[derive(Clone)]
 pub struct Attachments(PathBuf);
 pub struct Message {
     pub text: String,
@@ -253,6 +254,17 @@ impl Attachments {
         }
         Ok(json!({"offset":total,"imageId":id}))
     }
+    pub(crate) fn claude_image(&self, id: &str) -> Result<(PathBuf, Vec<u8>, &'static str), String> {
+        if !valid_id(id) { return Err("图片编号无效".into()); }
+        let original = self.0.join(id);
+        let metadata = fs::symlink_metadata(&original).map_err(|_| "图片尚未传到此电脑")?;
+        if !metadata.is_file() || metadata.len() > MAX as u64 { return Err("图片格式或大小无效".into()); }
+        let bytes = fs::read(&original).map_err(|_| "图片读取失败")?;
+        if !valid_image(&bytes) || format!("{:x}", Sha256::digest(&bytes)) != id { return Err("图片校验失败".into()); }
+        let mime = if bytes.starts_with(b"\x89PNG") { "image/png" } else { "image/jpeg" };
+        Ok((original, bytes, mime))
+    }
+
     pub fn input(&self, message: &Message) -> Result<Value, String> {
         let mut input = vec![];
         if !message.text.trim().is_empty() {

@@ -52,7 +52,7 @@ fn fixture() -> Fixture {
     fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
     let claude = Claude::with_paths(Paths {
         claude_home, app_data: Some(app), registry: root.path().join("storage/claude-sessions.json"), cli_override: Some(cli),
-    });
+    }, crate::attachments::Attachments::open(&root.path().join("storage")).unwrap());
     Fixture { root, claude, cwd }
 }
 

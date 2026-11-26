@@ -7,6 +7,7 @@ mod activity;
 mod adopt;
 mod gateway;
 mod inbox;
+mod message;
 mod index;
 mod projection;
 mod runner;
@@ -47,6 +48,7 @@ type Adopter = std::sync::Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 
 pub struct Claude {
     paths: Paths,
+    attachments: crate::attachments::Attachments,
     events: ClaudeEvents,
     turns: runner::Turns,
     search: search::Search,
@@ -55,17 +57,6 @@ pub struct Claude {
 
 fn request_id(params: &Value) -> Result<&str, String> {
     params["requestId"].as_str().filter(|id| index::is_uuid(id)).ok_or_else(|| "发送请求编号必须为 UUID".into())
-}
-
-fn message_text(params: &Value) -> Result<&str, String> {
-    let text = params["text"].as_str().map(str::trim).unwrap_or("");
-    if text.is_empty() {
-        return Err("请输入消息".into());
-    }
-    if text.len() > MAX_MESSAGE {
-        return Err("消息过长".into());
-    }
-    Ok(text)
 }
 
 fn permission_mode(mode: Option<&str>) -> &'static str {
@@ -78,15 +69,15 @@ fn permission_mode(mode: Option<&str>) -> &'static str {
 }
 
 impl Claude {
-    pub fn open(storage: &Path) -> Self {
+    pub fn open(storage: &Path, attachments: crate::attachments::Attachments) -> Self {
         // Resolving the login-shell PATH takes seconds; keep it off the RPC path.
         std::thread::spawn(gateway::shell_path);
-        Self::with_paths(Paths::detect(storage))
+        Self::with_paths(Paths::detect(storage), attachments)
     }
 
-    pub fn with_paths(paths: Paths) -> Self {
+    pub fn with_paths(paths: Paths, attachments: crate::attachments::Attachments) -> Self {
         Self {
-            paths, events: ClaudeEvents::default(), turns: runner::Turns::default(), search: search::Search::default(),
+            paths, attachments, events: ClaudeEvents::default(), turns: runner::Turns::default(), search: search::Search::default(),
             adopter: std::sync::Arc::new(adopt::open),
         }
     }
@@ -106,7 +97,7 @@ impl Claude {
 
     pub fn capability(&self) -> Value {
         match self.readiness() {
-            Ok(models) => json!({"available":true,"protocolVersion":1,"models":models}),
+            Ok(models) => json!({"available":true,"imageAttachments":true,"clientMessageId":true,"protocolVersion":1,"models":models}),
             Err(reason) => json!({"available":false,"protocolVersion":1,"reason":reason}),
         }
     }
@@ -264,7 +255,7 @@ impl Claude {
         if let Some(receipt) = self.turns.receipt(id) {
             return Ok(receipt);
         }
-        let text = message_text(params)?;
+        let message = message::Message::parse(params, &self.attachments)?;
         let session = index::resolve(&self.paths, params["threadId"].as_str().unwrap_or(""))?;
         if session.transcript.is_none() {
             return Err("电脑上没有这个会话的记录".into());
@@ -273,11 +264,11 @@ impl Claude {
             return Err("正在执行，可等待完成或停止".into());
         }
         if let Some(live) = session.live.as_ref() {
-            return self.deliver(&session, live, id, text);
+            return self.deliver(&session, live, id, &message.peer_text(id)?);
         }
         let launch = self.launch(&session.cwd, ["--resume", &session.cli_id], session.model.as_deref(),
             session.permission_mode.as_deref(), session.cli_version.as_deref())?;
-        self.turns.start(&self.events, &session.cli_id, &session.id, id, text, launch, None)
+        self.turns.start(&self.events, &session.cli_id, &session.id, id, &message.content(), launch, None)
     }
 
     /// Hand the message to the process the desktop runs for this session; it
@@ -308,7 +299,7 @@ impl Claude {
         if let Some(receipt) = self.turns.receipt(id) {
             return Ok(receipt);
         }
-        let text = message_text(params)?;
+        let message = message::Message::parse(params, &self.attachments)?;
         let cwd = params["cwd"].as_str().unwrap_or("");
         let sessions = index::sessions(&self.paths, true);
         if !sessions.iter().any(|s| s.cwd == cwd) || !Path::new(cwd).is_dir() {
@@ -318,7 +309,7 @@ impl Claude {
             .or_else(|| sessions.iter().find(|s| s.cwd == cwd).and_then(|s| s.model.clone()));
         let cli_id = uuid::Uuid::new_v4().to_string();
         let launch = self.launch(cwd, ["--session-id", &cli_id], model.as_deref(), Some("acceptEdits"), None)?;
-        index::remember(&self.paths, &cli_id, cwd, &projection::truncate(text, 60))?;
+        index::remember(&self.paths, &cli_id, cwd, &projection::truncate(if message.text.is_empty() { "图片" } else { &message.text }, 60))?;
         // Only the desktop's index makes the session appear there; ask it to import
         // the transcript once this process has exited, so it never has two writers.
         let (paths, adopter, events) = (self.paths.clone(), self.adopter.clone(), self.events.clone());
@@ -331,7 +322,7 @@ impl Claude {
             events.push(json!({"method":"claude/event","params":{"threadId":format!("cli:{session_id}"),"kind":"desktopImport",
                 "accepted":result.is_ok(),"error":result.err()}}));
         });
-        self.turns.start(&self.events, &cli_id, &format!("cli:{cli_id}"), id, text, launch, Some(after))
+        self.turns.start(&self.events, &cli_id, &format!("cli:{cli_id}"), id, &message.content(), launch, Some(after))
     }
 
     #[cfg(test)]

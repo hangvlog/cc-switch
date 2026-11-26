@@ -66,7 +66,8 @@ pub fn recorded(transcript: &Path, request_id: &str) -> bool {
     }
     // `uuid` when it starts a turn, `source_uuid` when queued into a running one.
     let needle = format!("uuid\":\"{request_id}\"");
-    String::from_utf8_lossy(&tail).contains(&needle)
+    let tail = String::from_utf8_lossy(&tail);
+    tail.contains(&needle) || tail.contains(&format!("[ClawKit:{request_id}]"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
