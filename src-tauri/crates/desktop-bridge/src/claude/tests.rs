@@ -213,39 +213,14 @@ fn delivers_to_the_process_the_desktop_runs() {
 }
 
 #[test]
-fn hands_phone_created_sessions_to_the_desktop_after_the_turn() {
-    let mut f = fixture();
-    let adopted = Arc::new(Mutex::new(Vec::<String>::new()));
-    let calls = adopted.clone();
-    f.claude.set_adopter(Arc::new(move |id: &str| { calls.lock().unwrap().push(id.into()); Ok(()) }));
-    let events = f.claude.events();
-    let receipt = f.claude.dispatch("claude/thread/create", &json!({"cwd":f.cwd,"requestId":uuid::Uuid::new_v4().to_string(),"text":"新会话"})).unwrap();
-    let thread = receipt["threadId"].as_str().unwrap().to_string();
-    let cli_id = thread.strip_prefix("cli:").unwrap().to_string();
-    let mut seen = Vec::new();
-    wait_for(&events, &mut seen, "approval");
-    // The CLI writes its transcript during the turn; nothing is imported while it runs.
-    let project = f.root.path().join("claude-home/projects").join(index::encode_project(&f.cwd));
-    fs::write(project.join(format!("{cli_id}.jsonl")), json!({"type":"user","uuid":"n1","parentUuid":null,
-        "timestamp":"2026-11-03T11:47:19.000Z","message":{"role":"user","content":"新会话"}}).to_string()).unwrap();
-    assert!(adopted.lock().unwrap().is_empty());
-    f.claude.dispatch("claude/request/respond", &json!({"threadId":thread,"requestId":"perm-1","decision":"accept"})).unwrap();
-    wait_for(&events, &mut seen, "completed");
-    let imported = wait_for(&events, &mut seen, "desktopImport");
-    assert_eq!(imported["params"]["threadId"], thread);
-    assert_eq!(imported["params"]["accepted"], true);
-    assert_eq!(*adopted.lock().unwrap(), vec![cli_id.clone()]);
-
-    // The desktop records the import under its own id; the phone's id keeps working.
-    let index_dir = f.root.path().join("Claude-3p/claude-code-sessions/acct/org");
-    fs::write(index_dir.join(format!("local_{cli_id}.json")), json!({"sessionId":format!("local_{cli_id}"),"cliSessionId":cli_id,
-        "cwd":f.cwd,"createdAt":1_793_706_852_183u64,"isArchived":false,"permissionMode":"acceptEdits"}).to_string()).unwrap();
-    let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
-    let ids: Vec<&str> = list["data"].as_array().unwrap().iter().filter_map(|t| t["id"].as_str()).collect();
-    assert!(ids.contains(&format!("local_{cli_id}").as_str()) && !ids.contains(&thread.as_str()), "{ids:?}");
-    let read = f.claude.dispatch("claude/thread/read", &json!({"threadId":thread})).unwrap();
-    assert_eq!(read["thread"]["id"], thread);
-    assert_eq!(read["thread"]["cliSessionId"], cli_id);
+fn new_sessions_do_not_send_the_user_message_when_desktop_initialization_fails() {
+    let mut f=fixture();
+    f.claude.set_adopter(Arc::new(|_|Err("test desktop unavailable".into())));
+    let id=uuid::Uuid::new_v4().to_string();
+    let result=f.claude.dispatch("claude/thread/create",&json!({"cwd":f.cwd,"requestId":id,"text":"new thread"}));
+    assert!(result.is_err());
+    assert!(f.claude.turns.receipt(&id).is_none());
+    assert!(f.claude.turns.running(&id).is_none());
 }
 
 #[test]
@@ -272,13 +247,6 @@ fn pins_a_desktop_model_for_phone_created_and_legacy_sessions() {
     assert_eq!(gateway.select_model(Some("claude-fable-5"), None).unwrap(), "claude-fable-5");
     assert!(gateway.select_model(Some("unlisted-model"), None).is_err());
     assert!(gateway.select_model(Some("claude-sonnet-5[1m]"), None).is_err());
-
-    let receipt = f.claude.dispatch("claude/thread/create", &json!({
-        "requestId":uuid::Uuid::new_v4().to_string(), "cwd":f.cwd, "text":"test", "model":"claude-sonnet-5"
-    })).unwrap();
-    let session = index::resolve(&f.claude.paths, receipt["threadId"].as_str().unwrap()).unwrap();
-    assert_eq!(session.model.as_deref(), Some("claude-sonnet-5"));
-    f.claude.turns.interrupt(&session.cli_id).unwrap();
 
     profile.as_object_mut().unwrap().remove("inferenceModels");
     fs::write(&file, profile.to_string()).unwrap();

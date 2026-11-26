@@ -131,3 +131,9 @@ Notifications: `claude/event` with `kind` = `started` / `update` / `approval` /
 `approvalResolved` / `completed`. `initialize` reports `clawkit.claudeDesktop`.
 
 Acceptance on real sessions: `cargo run --example claude_probe -- <storage> <method> '<json>'`.
+
+### macOS 首轮会话及双端审批（3.20.8）
+
+手机新建时，ClawKit 使用本地 `/rename` 初始化会话。初始化进程退出后，Claude Desktop 通过官方 resume 链接接管。ClawKit 核对原生会话、项目、模型和进程，再向该进程投递首条消息，并在转录中确认发送编号。同一发送编号复用同一原生会话。
+
+首次在该项目使用时，ClawKit 向项目的 `.claude/settings.local.json` 合并一个 `PermissionRequest` hook。它仅为该账户通过新流程创建的会话登记待处理请求。手机上的允许或拒绝交给 Claude 自身处理；用户也可以在电脑上作出决定。移除该配置中包含 `--clawkit-claude-permission` 的 hook 即可取消手机审批接入。已有独立 CLI 正在等待的审批继续由其原进程处理。Windows 保留首轮退出后收录的现有流程。

@@ -2,6 +2,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    #[cfg(unix)]
+    clawkit_desktop_bridge::claude::maybe_run_hook();
     clawkit_desktop_bridge::maybe_run_router();
     clawkit_desktop_bridge::native::maybe_run_adapter();
     // 在 Linux 上设置 WebKit 环境变量以解决 DMA-BUF 渲染问题

@@ -8,6 +8,12 @@ mod adopt;
 mod gateway;
 mod inbox;
 mod message;
+#[cfg(unix)]
+mod native_create;
+#[cfg(unix)]
+mod native_approval;
+#[cfg(unix)]
+pub use native_approval::maybe_run_hook;
 mod index;
 mod projection;
 mod runner;
@@ -53,6 +59,8 @@ pub struct Claude {
     turns: runner::Turns,
     search: search::Search,
     adopter: Adopter,
+    #[cfg(unix)]
+    create_lock: Mutex<()>,
 }
 
 fn request_id(params: &Value) -> Result<&str, String> {
@@ -78,6 +86,8 @@ impl Claude {
     pub fn with_paths(paths: Paths, attachments: crate::attachments::Attachments) -> Self {
         Self {
             paths, attachments, events: ClaudeEvents::default(), turns: runner::Turns::default(), search: search::Search::default(),
+            #[cfg(unix)]
+            create_lock: Mutex::new(()),
             adopter: std::sync::Arc::new(adopt::open),
         }
     }
@@ -118,6 +128,10 @@ impl Claude {
                 let session = index::resolve(&self.paths, params["threadId"].as_str().unwrap_or(""))?;
                 let id = params["requestId"].as_str().filter(|id| !id.is_empty() && id.len() < 200).ok_or("缺少审批编号")?;
                 let allow = matches!(params["decision"].as_str(), Some("accept" | "acceptForSession"));
+                #[cfg(unix)]
+                if id.starts_with("native:"){
+                    return native_approval::respond(&native_approval::database(&self.paths),&session.cli_id,id,allow,&params["answers"]);
+                }
                 self.turns.respond(&self.events, &session.cli_id, id, allow, &params["answers"])
             }
             _ => Err("此 Claude 操作不受支持".into()),
@@ -144,7 +158,11 @@ impl Claude {
         } else {
             (true, None)
         };
-        let status = if running.is_some() || desktop_busy { "running" } else if desktop.is_some() { "desktop-live" } else if session.live.is_some() { "desktop-open" } else { "idle" };
+        let mut approvals=running.as_ref().map(|r|r.approvals()).unwrap_or_default();
+        #[cfg(unix)]
+        if desktop.is_some() && running.is_none(){approvals.extend(native_approval::pending(&native_approval::database(&self.paths),&session.cli_id));}
+        let waiting=session.waiting || desktop.is_some_and(|l|l.status=="waiting");
+        let status = if running.is_some() || desktop_busy || waiting { "running" } else if desktop.is_some() { "desktop-live" } else if session.live.is_some() { "desktop-open" } else { "idle" };
         let active_turn = running.as_ref().map(|r| r.turn_id.clone()).or_else(|| desktop_busy.then(|| format!("desktop:{}", session.live.as_ref().map_or(0, |l| l.pid))));
         json!({
             "id":session.id,"engine":"claude","cliSessionId":session.cli_id,
@@ -161,9 +179,9 @@ impl Claude {
                 "canSteer":desktop_busy,
                 "deliversToDesktop":desktop.is_some(),
                 "activeTurnId":active_turn,
-                "approvals":running.as_ref().map(|r| r.approvals()).unwrap_or_default(),
+                "approvals":approvals,
                 "model":session.model,
-                "turnEndedAt":session.turn_ended_at,"focusedAt":session.focused_at,"waitingOnDesktop":session.waiting,
+                "turnEndedAt":session.turn_ended_at,"focusedAt":session.focused_at,"waitingOnDesktop":waiting,
             }
         })
     }
@@ -309,6 +327,10 @@ impl Claude {
         let explicit = params.get("model").filter(|v| !v.is_null())
             .map(|v| v.as_str().ok_or("模型名称必须为字符串")).transpose()?;
         let model = gateway.select_model(explicit, previous)?;
+        #[cfg(unix)]
+        { self.create_native(id,cwd,&message,&gateway,&model) }
+        #[cfg(not(unix))]
+        {
         let cli_id = uuid::Uuid::new_v4().to_string();
         let launch = self.launch(&gateway, cwd, ["--session-id", &cli_id], &model, Some("acceptEdits"), None)?;
         index::remember(&self.paths, &cli_id, cwd, &model, &projection::truncate(if message.text.is_empty() { "图片" } else { &message.text }, 60))?;
@@ -325,6 +347,7 @@ impl Claude {
                 "accepted":result.is_ok(),"error":result.err()}}));
         });
         self.turns.start(&self.events, &cli_id, &format!("cli:{cli_id}"), id, &message.content(), launch, Some(after))
+        }
     }
 
     #[cfg(test)]

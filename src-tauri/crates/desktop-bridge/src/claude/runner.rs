@@ -67,7 +67,7 @@ fn approval_from(request_id: &str, request: &Value) -> Value {
 }
 
 /// AskUserQuestion takes its answers back through the permission response.
-fn answered_input(input: &Value, answers: &Value) -> Value {
+pub(super) fn answered_input(input: &Value, answers: &Value) -> Value {
     let mut updated = input.clone();
     let mut map = serde_json::Map::new();
     for (index, question) in input["questions"].as_array().into_iter().flatten().enumerate() {
