@@ -1,5 +1,5 @@
 //! A Claude PermissionRequest hook for sessions created by this paired account.
-//! Claude still owns the prompt. A local decision cancels its hook process.
+//! Desktop and phone can answer the same prompt. A hook may outlive that decision.
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use std::{
@@ -150,27 +150,69 @@ fn install_hook(cwd: &Path, db: &Path) -> Result<(), String> {
 fn alive(pid: i64) -> bool {
     pid > 1 && pid <= i32::MAX as i64 && unsafe { libc::kill(pid as i32, 0) == 0 }
 }
-pub fn pending(file: &Path, sid: &str) -> Vec<Value> {
+pub fn pending(
+    file: &Path,
+    session: &super::index::Session,
+    records: Option<&[Value]>,
+) -> Vec<Value> {
     let Ok(db) = open_db(file) else { return vec![] };
-    let Ok(mut stmt)=db.prepare("SELECT pid,payload FROM prompts WHERE session=?1 AND decision IS NULL AND created>=unixepoch()-3600 ORDER BY created,id") else{return vec![]};
-    let Ok(rows) = stmt.query_map([sid], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))
-    else {
+    let Ok(mut stmt) = db.prepare(
+        "SELECT pid,payload,created FROM prompts WHERE session=?1 AND decision IS NULL
+         AND created>=unixepoch()-3600 ORDER BY created,id",
+    ) else {
         return vec![];
     };
-    rows.flatten()
-        .filter(|(pid, _)| alive(*pid))
-        .filter_map(|(_, s)| serde_json::from_str(&s).ok())
-        .collect()
+    let Ok(rows) = stmt.query_map([&session.cli_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, u64>(2)?,
+        ))
+    }) else {
+        return vec![];
+    };
+    let mut calls = None;
+    let mut settled = Vec::new();
+    let requests = rows
+        .flatten()
+        .filter_map(|(pid, payload, created)| {
+            if !alive(pid) {
+                return None;
+            }
+            let request: Value = serde_json::from_str(&payload).ok()?;
+            let history = calls.get_or_insert_with(|| match records {
+                Some(rows) => super::approval_history::from_records(rows),
+                None => super::approval_history::read(session.transcript.as_deref()),
+            });
+            if history.resolved(&request, created) {
+                if let Some(id) = request["requestId"].as_str() {
+                    settled.push(id.to_owned());
+                }
+                return None;
+            }
+            Some(request)
+        })
+        .collect();
+    drop(stmt);
+    // Removing an obsolete request also releases the waiting hook without
+    // returning a second decision to Claude.
+    for id in settled {
+        let _ = db.execute(
+            "DELETE FROM prompts WHERE session=?1 AND id=?2 AND decision IS NULL",
+            params![session.cli_id, id],
+        );
+    }
+    requests
 }
 
 pub fn respond(
     file: &Path,
-    sid: &str,
+    session: &super::index::Session,
     id: &str,
     allow: bool,
     answers: &Value,
 ) -> Result<Value, String> {
-    let request = pending(file, sid)
+    let request = pending(file, session, None)
         .into_iter()
         .find(|r| r["requestId"] == id)
         .ok_or("这条审批已结束，请刷新会话")?;
@@ -187,7 +229,7 @@ pub fn respond(
     let n = db
         .execute(
             "UPDATE prompts SET decision=?1 WHERE session=?2 AND id=?3 AND decision IS NULL",
-            params![result.to_string(), sid, id],
+            params![result.to_string(), session.cli_id, id],
         )
         .map_err(|_| "无法提交审批")?;
     if n != 1 {
@@ -242,10 +284,16 @@ fn run_hook(file: &Path) -> Result<Option<Value>, String> {
     }
     let id = format!("native:{}", uuid::Uuid::new_v4());
     let tool = event["tool_name"].as_str().ok_or("tool")?;
-    let payload = json!({"requestId":id,"tool":tool,"title":tool,"input":event["tool_input"],"kind":if tool=="AskUserQuestion"{"question"}else{"approval"}});
+    let mut payload = json!({"requestId":id,"tool":tool,"title":tool,"input":event["tool_input"],"kind":if tool=="AskUserQuestion"{"question"}else{"approval"}});
+    let path = event["transcript_path"].as_str().map(Path::new);
+    let calls = super::approval_history::read(path);
+    let created = crate::now_ms() / 1000;
+    if let Some(call_id) = calls.open_id(tool, &event["tool_input"], created) {
+        payload["toolUseId"] = json!(call_id);
+    }
     db.execute(
-        "INSERT INTO prompts(id,session,pid,created,payload) VALUES(?,?,?,unixepoch(),?)",
-        params![id, sid, std::process::id(), payload.to_string()],
+        "INSERT INTO prompts(id,session,pid,created,payload) VALUES(?,?,?,?,?)",
+        params![id, sid, std::process::id(), created, payload.to_string()],
     )
     .map_err(|_| "insert")?;
     let start = Instant::now();

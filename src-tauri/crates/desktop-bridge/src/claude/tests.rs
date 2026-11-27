@@ -189,6 +189,12 @@ fn delivers_to_the_process_the_desktop_runs() {
     fs::write(f.root.path().join("claude-home/settings.json"), r#"{"crossSessionInbound":"accept"}"#).unwrap();
     let list = f.claude.dispatch("claude/thread/list", &json!({})).unwrap();
     assert_eq!((list["data"][0]["desktop"]["status"].as_str(), list["data"][0]["desktop"]["canSend"].as_bool()), (Some("desktop-live"), Some(true)));
+    fs::write(sessions.join(format!("{pid}.json")), json!({"pid":pid,"sessionId":CLI_ID,"status":"waiting","messagingSocketPath":socket}).to_string()).unwrap();
+    let detail = f.claude.dispatch("claude/thread/read", &json!({"threadId":LOCAL_ID})).unwrap();
+    assert_eq!(detail["thread"]["desktop"]["waitingOnDesktop"], true);
+    assert_eq!(detail["thread"]["desktop"]["status"], "desktop-live", "the foreground phone keeps polling a waiting writer");
+    assert!(detail["thread"]["desktop"]["activeTurnId"].is_null());
+
     let transcript = f.root.path().join("claude-home/projects").join(index::encode_project(&f.cwd)).join(format!("{CLI_ID}.jsonl"));
     let inbox = std::thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();

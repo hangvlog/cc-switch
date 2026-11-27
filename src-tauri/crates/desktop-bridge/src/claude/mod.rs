@@ -4,6 +4,8 @@
 //! the desktop runs and shows the turn; a second process would silently fork
 //! the conversation. Other sessions run one CLI turn on the desktop's gateway.
 mod activity;
+#[cfg(unix)]
+mod approval_history;
 #[cfg(target_os = "macos")]
 mod native_mode;
 mod adopt;
@@ -140,7 +142,7 @@ impl Claude {
                 let allow = matches!(params["decision"].as_str(), Some("accept" | "acceptForSession"));
                 #[cfg(unix)]
                 if id.starts_with("native:"){
-                    return native_approval::respond(&native_approval::database(&self.paths),&session.cli_id,id,allow,&params["answers"]);
+                    return native_approval::respond(&native_approval::database(&self.paths), &session, id, allow, &params["answers"]);
                 }
                 self.turns.respond(&self.events, &session.cli_id, id, allow, &params["answers"])
             }
@@ -148,7 +150,7 @@ impl Claude {
         }
     }
 
-    fn summary(&self, session: &index::Session) -> Value {
+    fn summary(&self, session: &index::Session, _records: Option<&[Value]>) -> Value {
         let running = self.turns.running(&session.cli_id);
         // An open desktop session runs its own process; messages go to its inbox.
         let desktop = session.live.as_ref().filter(|l| cfg!(unix) && l.socket.is_some() && running.is_none());
@@ -170,9 +172,9 @@ impl Claude {
         };
         let mut approvals=running.as_ref().map(|r|r.approvals()).unwrap_or_default();
         #[cfg(unix)]
-        if desktop.is_some() && running.is_none(){approvals.extend(native_approval::pending(&native_approval::database(&self.paths),&session.cli_id));}
+        if desktop.is_some() && running.is_none(){approvals.extend(native_approval::pending(&native_approval::database(&self.paths), session, _records));}
         let waiting=session.waiting || desktop.is_some_and(|l|l.status=="waiting");
-        let status = if running.is_some() || desktop_busy || waiting { "running" } else if desktop.is_some() { "desktop-live" } else if session.live.is_some() { "desktop-open" } else { "idle" };
+        let status = if running.is_some() || desktop_busy { "running" } else if desktop.is_some() { "desktop-live" } else if waiting { "running" } else if session.live.is_some() { "desktop-open" } else { "idle" };
         let active_turn = running.as_ref().map(|r| r.turn_id.clone()).or_else(|| desktop_busy.then(|| format!("desktop:{}", session.live.as_ref().map_or(0, |l| l.pid))));
         json!({
             "id":session.id,"engine":"claude","cliSessionId":session.cli_id,
@@ -222,7 +224,7 @@ impl Claude {
             None
         };
         let data: Vec<Value> = sessions.iter().take(limit).map(|s| {
-            let mut summary = self.summary(s);
+            let mut summary = self.summary(s, None);
             summary["parentId"] = json!(parents.get(s.id.as_str()));
             summary["forkedFrom"] = json!(s.forked_from);
             summary["lineage"] = json!(s.lineage);
@@ -241,7 +243,7 @@ impl Claude {
         let (mut hits, unavailable) = self.search.find(&files, params["query"].as_str().unwrap_or(""))?;
         let mut data: Vec<Value> = sessions.iter().filter_map(|s| {
             let hit = hits.remove(&s.id)?;
-            let mut summary = self.summary(s);
+            let mut summary = self.summary(s, None);
             summary["searchMatch"] = json!({"snippet":hit.snippet,"historyCursor":""});
             Some(summary)
         }).collect();
@@ -255,8 +257,9 @@ impl Claude {
         let path = session.transcript.as_ref().ok_or("电脑上没有这个会话的记录")?;
         let limit = params["limit"].as_u64().unwrap_or(20).clamp(1, 100) as usize;
         let running = self.turns.running(&session.cli_id).map(|r| r.turn_id.clone());
-        let projection = projection::project(&projection::read_records(path)?, limit, running.as_deref());
-        let mut thread = self.summary(&session);
+        let records = projection::read_records(path)?;
+        let projection = projection::project(&records, limit, running.as_deref());
+        let mut thread = self.summary(&session, Some(&records));
         // After the desktop imports a phone-created session, keep the id the phone asked for.
         thread["id"] = json!(params["threadId"]);
         thread["preview"] = json!(projection.preview);
