@@ -59,17 +59,19 @@ impl Claude {
         model: &str,
     ) -> Result<Value, String> {
         let _guard = self.create_lock.lock().map_err(|_| "会话创建状态不可用")?;
-        if let Some(r) = self.turns.receipt(id) {
-            return Ok(r);
-        }
         // The UUID from the phone is also the persistent idempotency key.
         let sid = id;
-        if index::find_transcript(&self.paths, sid, cwd).is_some()
-            && !native_approval::owns(&self.paths, sid, cwd)
-        {
+        let existing = index::find_transcript(&self.paths, sid, cwd);
+        let has_state = existing.is_some()
+            || index::creation_writer(&self.paths, sid)?.is_some()
+            || index::imported_session(&self.paths, sid)?.is_some();
+        let owned = native_approval::owns(&self.paths, sid, cwd);
+        if has_state && !owned {
             return Err("此请求编号已被其他 Claude 会话使用".into());
         }
-        native_approval::prepare(&self.paths, cwd, sid)?;
+        if !owned {
+            native_approval::prepare(&self.paths, cwd, sid)?;
+        }
         let db = rusqlite::Connection::open(native_approval::database(&self.paths))
             .map_err(|_| "无法检查会话回执")?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS deliveries(session TEXT PRIMARY KEY,text_digest TEXT NOT NULL,sent INTEGER NOT NULL DEFAULT 0);").map_err(|_|"无法检查发送记录")?;
@@ -95,15 +97,20 @@ impl Claude {
         }
         let thread = format!("local_{sid}");
         let receipt = |recorded: bool| json!({"threadId":thread,"turnId":id,"accepted":true,"deliveredTo":"desktop","recorded":recorded});
-        let existing = index::find_transcript(&self.paths, sid, cwd);
         if sent {
+            if let Some(r) = self.turns.receipt(id).filter(|r| r["threadId"] == thread && r["recorded"] == true) {
+                return Ok(r);
+            }
             return if existing.as_deref().is_some_and(|f| inbox::recorded(f, id)) {
                 Ok(receipt(true))
             } else {
                 Err("上次发送尚未在 Claude 桌面记录，打开对应会话核对后再发送".into())
             };
         }
-        if existing.is_none() {
+        if owned {
+            native_approval::prepare(&self.paths, cwd, sid)?;
+        }
+        if !has_state {
             let title: String = msg
                 .text
                 .split_whitespace()
@@ -124,26 +131,38 @@ impl Claude {
             )?;
             seed(launch, sid, title)?;
         }
-        (self.adopter)(sid)?;
+        let mut may_open = true;
         let end = Instant::now() + Duration::from_secs(12);
-        // A stale PID or an SDK session must never receive the first message.
         let (live, session) = loop {
-            let live = index::live_processes(&self.paths)
-                .remove(sid)
-                .filter(|l| l.host.as_deref() == Some(&thread) && l.socket.is_some());
-            if let Some(live) = live {
-                if let Ok(session) = index::resolve(&self.paths, &thread) {
-                    break (live, session);
+            let session = index::imported_session(&self.paths, sid)?;
+            if session.as_ref().is_some_and(|s| s.cwd != cwd || s.archived) {
+                return Err("Claude 桌面的会话与手机请求不匹配，首条消息尚未发送".into());
+            }
+            match index::creation_writer(&self.paths, sid)? {
+                Some(writer) => {
+                    // Desktop can publish its process before its index or inbox.
+                    // Once observed, never navigate to replace it on this attempt.
+                    may_open = false;
+                    if writer.host.as_deref() != Some(&thread) {
+                        return Err("此会话正由其他 Claude 进程持有，首条消息尚未发送".into());
+                    }
+                    if let Some(session) = session {
+                        if writer.socket.is_some() {
+                            break (writer, session);
+                        }
+                    }
                 }
+                None if may_open => {
+                    (self.adopter)(sid)?;
+                    may_open = false;
+                }
+                None => {}
             }
             if Instant::now() >= end {
-                return Err("Claude 桌面未打开新会话，首条消息尚未发送".into());
+                return Err("Claude 桌面会话尚未就绪，首条消息尚未发送".into());
             }
             std::thread::sleep(Duration::from_millis(150));
         };
-        if session.cwd != cwd || session.archived {
-            return Err("Claude 桌面打开的项目或会话状态与手机请求不同".into());
-        }
         if session
             .model
             .as_deref()
@@ -167,6 +186,9 @@ impl Claude {
             return Err(reason.into());
         }
         let text = msg.peer_text(id)?;
+        // A stale socket did not receive any bytes. Leave this request retryable
+        // until connected, then claim it before writing to prevent duplicates.
+        let stream = inbox::connect(&live)?;
         let changed = db
             .execute(
                 "UPDATE deliveries SET sent=1 WHERE session=? AND sent=0",
@@ -176,7 +198,7 @@ impl Claude {
         if changed != 1 {
             return Err("同一条消息正在发送".into());
         }
-        inbox::deliver(&self.paths, &live, id, &text)?;
+        inbox::send_connected(stream, &self.paths, &live, id, &text)?;
         for _ in 0..24 {
             if inbox::recorded(&transcript, id) {
                 let ok = receipt(true);

@@ -152,4 +152,6 @@ Acceptance on real sessions: `cargo run --example claude_probe -- <storage> <met
 
 手机新建时，ClawKit 使用本地 `/rename` 初始化会话。初始化进程退出后，Claude Desktop 通过官方 resume 链接接管。ClawKit 核对原生会话、项目、模型和进程，再向该进程投递首条消息，并在转录中确认发送编号。同一发送编号复用同一原生会话。
 
+重试未送达的首条消息时，如果原生会话已经导入、项目匹配，且原生进程可接收消息，桥接直接使用该进程。权限模式已就绪时整个重试无需打开桌面页面。同一编号重试会核对消息内容。收件 socket 尚未连通时可继续重试；开始写入后按转录核对回执，以免重复投递。原生索引无法读取、同一会话有多个进程或进程与原生会话不匹配时，手机会收到错误。首次导入和需要通过桌面选择权限模式的路径仍可能切换桌面会话。
+
 首次在该项目使用时，ClawKit 向项目的 `.claude/settings.local.json` 合并一个 `PermissionRequest` hook。它仅为该账户通过新流程创建的会话登记待处理请求。手机上的允许或拒绝交给 Claude 自身处理；用户也可以在电脑上作出决定。移除该配置中包含 `--clawkit-claude-permission` 的 hook 即可取消手机审批接入。已有独立 CLI 正在等待的审批继续由其原进程处理。Windows 保留首轮退出后收录的现有流程。

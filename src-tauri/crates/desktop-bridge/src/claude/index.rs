@@ -7,6 +7,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(unix)]
+use std::io;
+
 const MAX_REGISTRY: usize = 200;
 
 #[derive(Clone, Debug)]
@@ -137,6 +140,20 @@ fn pid_alive(pid: i64) -> bool {
     pid > 0
 }
 
+fn live_record(record: &Value) -> Option<(&str, Live)> {
+    let pid = record["pid"].as_i64()?;
+    let id = record["sessionId"].as_str()?;
+    if !pid_alive(pid) {
+        return None;
+    }
+    Some((id, Live {
+        pid,
+        host: record["hostSessionId"].as_str().map(str::to_owned),
+        status: record["status"].as_str().unwrap_or("unknown").into(),
+        socket: record["messagingSocketPath"].as_str().map(PathBuf::from).filter(|p| p.is_absolute()),
+    }))
+}
+
 /// CLI session id -> process currently attached to it (desktop or terminal).
 pub fn live_processes(paths: &Paths) -> HashMap<String, Live> {
     let mut live = HashMap::new();
@@ -146,13 +163,83 @@ pub fn live_processes(paths: &Paths) -> HashMap<String, Live> {
             continue;
         }
         let Some(record) = fs::read(&path).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok()) else { continue };
-        let (Some(pid), Some(id)) = (record["pid"].as_i64(), record["sessionId"].as_str()) else { continue };
-        if pid_alive(pid) {
-            let socket = record["messagingSocketPath"].as_str().map(PathBuf::from).filter(|p| p.is_absolute());
-            live.insert(id.to_string(), Live { pid, host:record["hostSessionId"].as_str().map(str::to_owned), status: record["status"].as_str().unwrap_or("unknown").into(), socket });
+        if let Some((id, process)) = live_record(&record) {
+            live.insert(id.to_owned(), process);
         }
     }
     live
+}
+
+#[cfg(unix)]
+fn read_optional_record(path: &Path) -> io::Result<Option<Value>> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+// Delivery decisions need to distinguish a missing writer from unreadable
+// state and competing live processes. Listing sessions is best effort.
+#[cfg(unix)]
+pub(super) fn creation_writer(paths: &Paths, sid: &str) -> Result<Option<Live>, String> {
+    let unreadable = "无法核实 Claude 写入进程，首条消息尚未发送";
+    let entries = match fs::read_dir(paths.claude_home.join("sessions")) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(unreadable.into()),
+    };
+    let mut writer = None;
+    for entry in entries {
+        let path = entry.map_err(|_| unreadable)?.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let Some(record) = read_optional_record(&path).map_err(|_| unreadable)? else { continue };
+        if record["sessionId"].as_str() != Some(sid) {
+            continue;
+        }
+        record["pid"].as_i64().filter(|p| *p > 1).ok_or(unreadable)?;
+        let Some((_, process)) = live_record(&record) else { continue };
+        if writer.replace(process).is_some() {
+            return Err("多个 Claude 进程正在写入同一会话，首条消息尚未发送".into());
+        }
+    }
+    Ok(writer)
+}
+
+#[cfg(unix)]
+fn subdirectories(path: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut dirs = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        if entry.file_type()?.is_dir() {
+            dirs.push(entry.path());
+        }
+    }
+    Ok(dirs)
+}
+
+/// A resume-link import uses local_<CLI UUID>. Read that exact native record
+/// across account/org directories without opening other sessions' transcripts.
+#[cfg(unix)]
+pub(super) fn imported_session(paths: &Paths, sid: &str) -> Result<Option<Session>, String> {
+    if !is_uuid(sid) { return Err("Claude 会话 ID 无效".into()); }
+    let id = format!("local_{sid}");
+    let name = format!("{id}.json");
+    let base = paths.app_data.as_ref().ok_or("找不到 Claude 桌面数据")?.join("claude-code-sessions");
+    let unreadable = "无法核实 Claude 桌面会话索引，首条消息尚未发送";
+    let mut session = None;
+    for account in subdirectories(&base).map_err(|_| unreadable)? {
+        for org in subdirectories(&account).map_err(|_| unreadable)? {
+            let Some(raw) = read_optional_record(&org.join(&name)).map_err(|_| unreadable)? else { continue };
+            if session.is_some() || raw["sessionId"] != id || raw["cliSessionId"] != sid {
+                return Err("Claude 桌面会话身份不唯一或与手机请求不匹配，首条消息尚未发送".into());
+            }
+            session = Some(session_from(paths, &raw, &HashMap::new()).ok_or(unreadable)?);
+        }
+    }
+    Ok(session)
 }
 
 /// Entries the desktop keeps in `waiting-input/` while a session waits for you.

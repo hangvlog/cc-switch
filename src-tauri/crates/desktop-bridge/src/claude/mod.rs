@@ -332,6 +332,7 @@ impl Claude {
 
     fn create(&self, params: &Value) -> Result<Value, String> {
         let id = request_id(params)?;
+        #[cfg(not(unix))]
         if let Some(receipt) = self.turns.receipt(id) {
             return Ok(receipt);
         }

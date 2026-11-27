@@ -224,6 +224,97 @@ fn new_sessions_do_not_send_the_user_message_when_desktop_initialization_fails()
 }
 
 #[test]
+fn retries_an_imported_creation_without_navigating_or_delivering_twice() {
+    use std::io::{BufRead, BufReader, Write};
+    use std::os::unix::net::UnixListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut f = fixture();
+    let paths = &f.claude.paths;
+    let sid = uuid::Uuid::new_v4().to_string();
+    let thread = format!("local_{sid}");
+    native_approval::prepare(paths, &f.cwd, &sid).unwrap();
+    let transcript = paths.claude_home.join("projects").join(index::encode_project(&f.cwd))
+        .join(format!("{sid}.jsonl"));
+    fs::write(&transcript, "").unwrap();
+    fs::write(paths.claude_home.join("settings.json"), r#"{"crossSessionInbound":"accept"}"#).unwrap();
+    let native = paths.app_data.as_ref().unwrap().join("claude-code-sessions/acct/org");
+    let native_path = native.join(format!("{thread}.json"));
+    let native_record = json!({
+        "sessionId":thread,"cliSessionId":sid,"cwd":f.cwd,"permissionMode":"bypassPermissions"
+    }).to_string();
+    let sessions = paths.claude_home.join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let socket_dir = tempfile::Builder::new().prefix("ck-retry-").tempdir_in("/tmp").unwrap();
+    let socket = socket_dir.path().join("inbox");
+    let pid = std::process::id();
+    let writer_record = sessions.join(format!("{pid}.json"));
+    let mut writer = json!({"pid":pid,"sessionId":sid,"hostSessionId":LOCAL_ID,"messagingSocketPath":socket});
+    fs::write(&writer_record, writer.to_string()).unwrap();
+    let imports = Arc::new(AtomicUsize::new(0));
+    let calls = imports.clone();
+    f.claude.set_adopter(Arc::new(move |_| {
+        calls.fetch_add(1, Ordering::SeqCst);
+        Err("unexpected desktop navigation".into())
+    }));
+    let params = json!({"cwd":f.cwd,"requestId":sid,"text":"retry"});
+    let wrong_owner = f.claude.dispatch("claude/thread/create", &params).unwrap_err();
+    assert!(wrong_owner.contains("其他 Claude 进程"), "{wrong_owner}");
+    assert_eq!(imports.load(Ordering::SeqCst), 0);
+
+    // A live writer already claims the CLI ID before the native index exists.
+    // Reject ambiguous reads and wait for the original writer when it matches.
+    writer["hostSessionId"] = json!(thread);
+    fs::write(&writer_record, writer.to_string()).unwrap();
+    fs::write(&native_path, "{").unwrap();
+    let unreadable = f.claude.dispatch("claude/thread/create", &params).unwrap_err();
+    assert!(unreadable.contains("索引"), "{unreadable}");
+    // The process may still advertise a socket which is no longer listening.
+    fs::write(&native_path, &native_record).unwrap();
+    let disconnected = f.claude.dispatch("claude/thread/create", &params).unwrap_err();
+    assert!(disconnected.contains("无法连接"), "{disconnected}");
+    let listener = UnixListener::bind(&socket).unwrap();
+    fs::remove_file(&native_path).unwrap();
+    let publish_index = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        fs::write(native_path, native_record).unwrap();
+    });
+    listener.set_nonblocking(true).unwrap();
+    let receiver = std::thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let stream = loop {
+            match listener.accept() {
+                Ok((s, _)) => break s,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline =>
+                    std::thread::sleep(Duration::from_millis(10)),
+                Err(e) => panic!("inbox did not receive the message: {e}"),
+            }
+        };
+        stream.set_nonblocking(false).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let msg: Value = serde_json::from_str(&BufReader::new(stream).lines().next().unwrap().unwrap()).unwrap();
+        let mut file = fs::OpenOptions::new().append(true).open(transcript).unwrap();
+        writeln!(file, "{msg}").unwrap();
+        (msg, listener)
+    });
+    let receipt = f.claude.dispatch("claude/thread/create", &params).unwrap();
+    assert_eq!(receipt["threadId"], thread);
+    assert_eq!(receipt["recorded"], true);
+    publish_index.join().unwrap();
+    let (msg, listener) = receiver.join().unwrap();
+    assert_eq!(msg["uuid"], sid);
+    let altered = json!({"cwd":f.cwd,"requestId":sid,"text":"different payload"});
+    let conflict = f.claude.dispatch("claude/thread/create", &altered).unwrap_err();
+    assert!(conflict.contains("另一条消息"), "{conflict}");
+    // Clear in-memory receipts as on service restart. The persistent receipt
+    // must reconcile the original message without a second inbox delivery.
+    f.claude.turns = runner::Turns::default();
+    assert_eq!(f.claude.dispatch("claude/thread/create", &params).unwrap(), receipt);
+    assert_eq!(listener.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    assert_eq!(imports.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn resume_link_targets_only_session_ids() {
     assert_eq!(adopt::resume_url(CLI_ID).as_deref(), Some("claude://resume?session=747a8e82-3bed-4378-be99-80f2dcec6d9b"));
     assert!(adopt::resume_url("x&session=evil").is_none());

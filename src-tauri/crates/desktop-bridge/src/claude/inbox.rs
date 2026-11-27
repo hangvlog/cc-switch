@@ -31,10 +31,14 @@ pub fn message_line(request_id: &str, text: &str) -> String {
 }
 
 #[cfg(unix)]
-pub fn deliver(paths: &Paths, live: &Live, request_id: &str, text: &str) -> Result<(), String> {
-    use std::{io::Write, os::unix::net::UnixStream};
+pub(super) fn connect(live: &Live) -> Result<std::os::unix::net::UnixStream, String> {
     let socket = live.socket.as_deref().ok_or("电脑上的 Claude 版本不支持接收手机消息，请在电脑上更新 Claude")?;
-    let mut stream = UnixStream::connect(socket).map_err(|_| "无法连接电脑上的 Claude 会话，请稍后重试")?;
+    std::os::unix::net::UnixStream::connect(socket).map_err(|_| "无法连接电脑上的 Claude 会话，请稍后重试".into())
+}
+
+#[cfg(unix)]
+pub(super) fn send_connected(mut stream: std::os::unix::net::UnixStream, paths: &Paths, live: &Live, request_id: &str, text: &str) -> Result<(), String> {
+    use std::io::Write;
     stream.set_write_timeout(Some(Duration::from_secs(3))).ok();
     let mut payload = String::new();
     if let Some(token) = peer_token(paths, live.pid) {
@@ -47,6 +51,11 @@ pub fn deliver(paths: &Paths, live: &Live, request_id: &str, text: &str) -> Resu
     // Give the inbox time to read before the connection closes.
     std::thread::sleep(Duration::from_millis(300));
     Ok(())
+}
+
+#[cfg(unix)]
+pub fn deliver(paths: &Paths, live: &Live, request_id: &str, text: &str) -> Result<(), String> {
+    send_connected(connect(live)?, paths, live, request_id, text)
 }
 
 #[cfg(not(unix))]
