@@ -86,6 +86,7 @@ name = "clawkit-desktop-bridge"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "cc",
  "image",
  "libc",
  "rusqlite",

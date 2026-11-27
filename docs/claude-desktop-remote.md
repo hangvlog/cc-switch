@@ -69,7 +69,23 @@ flag the `env` block of `~/.claude/settings.json` can re-point the provider.
 answers go back through `updatedInput.answers`, keyed by question text. The
 process exits when the turn ends.
 
-Remote turns never get `bypassPermissions` or `auto`: those map to `acceptEdits`.
+For phone turns run by the bridge, the official CLI receives the user's
+`permissions.defaultMode: "bypassPermissions"` from their Claude settings
+as an explicit launch mode. This also applies to an older conversation
+recorded with `acceptEdits`. Otherwise the bridge preserves a recorded
+`default`, `plan`, or `bypassPermissions` and uses `acceptEdits` as its fallback.
+The CLI enforces its managed policy. A loaded Claude Desktop session runs
+with the mode in its own selector. Claude Desktop 6.28899.6 imports CLI
+sessions as `acceptEdits` even when the CLI seed used bypass; the import
+alone does not switch its running worker. On macOS, when the same local user has selected bypass in their Claude
+settings and opted in for their desktop account, ClawKit uses the Code
+tab's macOS accessibility controls to restore the mode. Each action targets
+the web area for the exact native session ID. The bridge verifies Claude's
+persisted mode before delivery. A locked Mac, missing Accessibility access,
+or unavailable selection returns an actionable error on the phone. If
+the session already runs in bypass mode, no UI change is needed. Cross-session
+inbound settings still apply. Windows uses the CLI setting for bridge-owned
+turns; a session open in Windows Claude Desktop retains its native mode.
 
 ## Session ownership
 

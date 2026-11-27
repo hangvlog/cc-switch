@@ -254,3 +254,21 @@ fn pins_a_desktop_model_for_phone_created_and_legacy_sessions() {
     assert_eq!(discovery.select_model(None, Some("discovered-model")).unwrap(), "discovered-model");
     assert!(discovery.select_model(None, None).is_err());
 }
+
+#[test]
+fn phone_launch_uses_the_desktop_users_bypass_for_old_and_new_sessions() {
+    let f = fixture();
+    let settings = f.claude.paths.claude_home.join("settings.json");
+    let gateway = gateway::gateway(&f.claude.paths).unwrap();
+    let launch_mode = |operation, recorded| {
+        let launch = f.claude.launch(&gateway, &f.cwd, [operation, CLI_ID],
+            "claude-fable-5", recorded, None).unwrap();
+        launch.args.windows(2).find(|pair| pair[0] == "--permission-mode").unwrap()[1].clone()
+    };
+    assert_eq!(launch_mode("--session-id", None), "acceptEdits");
+    assert_eq!(launch_mode("--resume", Some("plan")), "plan");
+    assert_eq!(launch_mode("--resume", Some("bypassPermissions")), "bypassPermissions");
+    fs::write(settings, r#"{"permissions":{"defaultMode":"bypassPermissions"}}"#).unwrap();
+    assert_eq!(launch_mode("--session-id", None), "bypassPermissions");
+    assert_eq!(launch_mode("--resume", Some("acceptEdits")), "bypassPermissions");
+}

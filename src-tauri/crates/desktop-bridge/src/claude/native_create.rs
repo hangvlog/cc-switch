@@ -119,7 +119,7 @@ impl Claude {
                 cwd,
                 ["--session-id", sid],
                 model,
-                Some("acceptEdits"),
+                None,
                 None,
             )?;
             seed(launch, sid, title)?;
@@ -150,6 +150,13 @@ impl Claude {
             .is_some_and(|actual| actual != model)
         {
             return Err("Claude 桌面采用了不同的模型，首条消息尚未发送".into());
+        }
+        #[cfg(target_os = "macos")]
+        if super::permission_mode(&self.paths, session.permission_mode.as_deref()) == "bypassPermissions" {
+            if let Some(reason) = inbox::blocked_reason(inbox::inbound(&self.paths, cwd, Some("bypassPermissions"))) {
+                return Err(reason.into());
+            }
+            super::native_mode::ensure(&self.paths, &session)?;
         }
         let transcript = session.transcript.ok_or("Claude 桌面没有新会话的记录")?;
         if let Some(reason) = inbox::blocked_reason(inbox::inbound(

@@ -4,6 +4,8 @@
 //! the desktop runs and shows the turn; a second process would silently fork
 //! the conversation. Other sessions run one CLI turn on the desktop's gateway.
 mod activity;
+#[cfg(target_os = "macos")]
+mod native_mode;
 mod adopt;
 mod gateway;
 mod inbox;
@@ -67,11 +69,19 @@ fn request_id(params: &Value) -> Result<&str, String> {
     params["requestId"].as_str().filter(|id| index::is_uuid(id)).ok_or_else(|| "发送请求编号必须为 UUID".into())
 }
 
-fn permission_mode(mode: Option<&str>) -> &'static str {
-    match mode {
+/// A user-level bypass selection applies to phone turns too, including old
+/// imports recorded as acceptEdits. Claude enforces managed restrictions
+/// when it processes the selected mode.
+fn permission_mode(paths: &Paths, recorded: Option<&str>) -> &'static str {
+    let user_default = std::fs::read(paths.claude_home.join("settings.json")).ok()
+        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+    if user_default.as_ref().is_some_and(|s| s["permissions"]["defaultMode"] == "bypassPermissions") {
+        return "bypassPermissions";
+    }
+    match recorded {
+        Some("bypassPermissions") => "bypassPermissions",
         Some("default") => "default",
         Some("plan") => "plan",
-        // Bypass and classifier modes are not granted to remote turns.
         _ => "acceptEdits",
     }
 }
@@ -261,7 +271,7 @@ impl Claude {
             "--permission-prompt-tool", "stdio"].iter().map(|s| s.to_string()).collect();
         args.extend(session_args.iter().map(|s| s.to_string()));
         args.extend(["--model".into(), model.into()]);
-        args.extend(["--permission-mode".into(), permission_mode(mode).into()]);
+        args.extend(["--permission-mode".into(), permission_mode(&self.paths, mode).into()]);
         Ok(runner::Launch { cli, cwd: PathBuf::from(cwd), env: gateway::child_env(gateway), args })
     }
 
@@ -292,7 +302,16 @@ impl Claude {
     /// runs (or joins) the turn there and the desktop shows it.
     fn deliver(&self, session: &index::Session, live: &index::Live, id: &str, text: &str) -> Result<Value, String> {
         if live.socket.is_some() {
-            if let Some(reason) = inbox::blocked_reason(inbox::inbound(&self.paths, &session.cwd, session.permission_mode.as_deref())) {
+            let mut mode = session.permission_mode.as_deref();
+            #[cfg(target_os = "macos")]
+            if live.host.as_deref() == Some(session.id.as_str()) && permission_mode(&self.paths, mode) == "bypassPermissions" {
+                if let Some(reason) = inbox::blocked_reason(inbox::inbound(&self.paths, &session.cwd, Some("bypassPermissions"))) {
+                    return Err(reason.into());
+                }
+                native_mode::ensure(&self.paths, session)?;
+                mode = Some("bypassPermissions");
+            }
+            if let Some(reason) = inbox::blocked_reason(inbox::inbound(&self.paths, &session.cwd, mode)) {
                 return Err(reason.into());
             }
         }
@@ -332,7 +351,7 @@ impl Claude {
         #[cfg(not(unix))]
         {
         let cli_id = uuid::Uuid::new_v4().to_string();
-        let launch = self.launch(&gateway, cwd, ["--session-id", &cli_id], &model, Some("acceptEdits"), None)?;
+        let launch = self.launch(&gateway, cwd, ["--session-id", &cli_id], &model, None, None)?;
         index::remember(&self.paths, &cli_id, cwd, &model, &projection::truncate(if message.text.is_empty() { "图片" } else { &message.text }, 60))?;
         // Only the desktop's index makes the session appear there; ask it to import
         // the transcript once this process has exited, so it never has two writers.
