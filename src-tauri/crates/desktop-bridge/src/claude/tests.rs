@@ -369,3 +369,34 @@ fn phone_launch_uses_the_desktop_users_bypass_for_old_and_new_sessions() {
     assert_eq!(launch_mode("--session-id", None), "bypassPermissions");
     assert_eq!(launch_mode("--resume", Some("acceptEdits")), "bypassPermissions");
 }
+
+#[test]
+fn imported_creation_falls_back_to_cli_when_desktop_yields_warm_writer() {
+    let mut f = fixture();
+    let paths = f.claude.paths.clone();
+    let cwd = f.cwd.clone();
+    let sid = uuid::Uuid::new_v4().to_string();
+    let thread = format!("local_{sid}");
+    let cli = f.root.path().join("fake-claude-gov");
+    fs::write(&cli, "#!/bin/sh\nread first\ncase \"$first\" in *'/rename '*) exit 0;; esac\necho '{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"S\"}'\necho '{\"type\":\"assistant\",\"uuid\":\"a1\",\"parent_tool_use_id\":null,\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"GOV_OK\"}]}}'\necho '{\"type\":\"result\",\"is_error\":false,\"duration_ms\":5,\"total_cost_usd\":0,\"result\":\"ok\"}'\n").unwrap();
+    fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+    f.claude.paths.cli_override = Some(cli);
+    let native_dir = paths.app_data.as_ref().unwrap().join("claude-code-sessions/acct/org");
+    let project_dir = paths.claude_home.join("projects").join(index::encode_project(&cwd));
+    let thread_for_adopt = thread.clone();
+    f.claude.set_adopter(Arc::new(move |id| {
+        fs::write(project_dir.join(format!("{id}.jsonl")), "").unwrap();
+        fs::write(native_dir.join(format!("{thread_for_adopt}.json")), json!({
+            "sessionId": thread_for_adopt, "cliSessionId": id, "cwd": cwd, "permissionMode": "acceptEdits"
+        }).to_string()).unwrap();
+        Ok(())
+    }));
+    let events = f.claude.events();
+    let receipt = f.claude.dispatch("claude/thread/create", &json!({"cwd":f.cwd,"requestId":sid,"text":"hi"})).unwrap();
+    assert_eq!(receipt["threadId"], thread);
+    assert_eq!(receipt["accepted"], true);
+    let mut seen = Vec::new();
+    let done = wait_for(&events, &mut seen, "completed");
+    assert_eq!(done["params"]["status"], "completed");
+    assert_eq!(f.claude.dispatch("claude/thread/create", &json!({"cwd":f.cwd,"requestId":sid,"text":"hi"})).unwrap(), receipt);
+}

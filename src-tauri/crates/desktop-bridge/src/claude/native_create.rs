@@ -98,7 +98,7 @@ impl Claude {
         let thread = format!("local_{sid}");
         let receipt = |recorded: bool| json!({"threadId":thread,"turnId":id,"accepted":true,"deliveredTo":"desktop","recorded":recorded});
         if sent {
-            if let Some(r) = self.turns.receipt(id).filter(|r| r["threadId"] == thread && r["recorded"] == true) {
+            if let Some(r) = self.turns.receipt(id).filter(|r| r["threadId"] == thread && (r["recorded"] == true || r["deliveredTo"].is_null())) {
                 return Ok(r);
             }
             return if existing.as_deref().is_some_and(|f| inbox::recorded(f, id)) {
@@ -132,11 +132,18 @@ impl Claude {
             seed(launch, sid, title)?;
         }
         let mut may_open = true;
+        #[cfg(target_os = "macos")]
+        let mut ui_guard: Option<super::native_mode::UiGuard> = None;
+        let mut opened_here = false;
+        let mut session_seen_at: Option<Instant> = None;
         let end = Instant::now() + Duration::from_secs(12);
-        let (live, session) = loop {
+        let (mut live, session) = loop {
             let session = index::imported_session(&self.paths, sid)?;
             if session.as_ref().is_some_and(|s| s.cwd != cwd || s.archived) {
                 return Err("Claude 桌面的会话与手机请求不匹配，首条消息尚未发送".into());
+            }
+            if session.is_some() && session_seen_at.is_none() {
+                session_seen_at = Some(Instant::now());
             }
             match index::creation_writer(&self.paths, sid)? {
                 Some(writer) => {
@@ -148,15 +155,34 @@ impl Claude {
                     }
                     if let Some(session) = session {
                         if writer.socket.is_some() {
-                            break (writer, session);
+                            break (Some(writer), session);
                         }
                     }
                 }
                 None if may_open => {
+                    #[cfg(target_os = "macos")]
+                    {
+                        let mut guard = super::native_mode::UiGuard::capture();
+                        (self.adopter)(sid)?;
+                        guard.mark_navigated(thread.clone());
+                        ui_guard = Some(guard);
+                    }
+                    #[cfg(not(target_os = "macos"))]
                     (self.adopter)(sid)?;
                     may_open = false;
+                    opened_here = true;
                 }
-                None => {}
+                None => {
+                    // When Claude Desktop's CliGovernor is at its warm-process cap,
+                    // import succeeds and registers the sidebar row without warming
+                    // a live CLI writer. After a brief grace window, proceed with
+                    // the registered native session and fall back to CLI resume.
+                    if let Some(session) = session {
+                        if session_seen_at.is_some_and(|t| t.elapsed() >= Duration::from_millis(2500)) {
+                            break (None, session);
+                        }
+                    }
+                }
             }
             if Instant::now() >= end {
                 return Err("Claude 桌面会话尚未就绪，首条消息尚未发送".into());
@@ -175,20 +201,63 @@ impl Claude {
             if let Some(reason) = inbox::blocked_reason(inbox::inbound(&self.paths, cwd, Some("bypassPermissions"))) {
                 return Err(reason.into());
             }
-            super::native_mode::ensure(&self.paths, &session)?;
+            super::native_mode::ensure_in_place(&self.paths, &session, opened_here)?;
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(mut guard) = ui_guard.take() {
+            guard.restore();
+        }
+        if live.is_none() {
+            if let Some(writer) = index::creation_writer(&self.paths, sid)? {
+                if writer.host.as_deref() != Some(&thread) {
+                    return Err("此会话正由其他 Claude 进程持有，首条消息尚未发送".into());
+                }
+                if writer.socket.is_some() {
+                    live = Some(writer);
+                }
+            }
         }
         let transcript = session.transcript.ok_or("Claude 桌面没有新会话的记录")?;
-        if let Some(reason) = inbox::blocked_reason(inbox::inbound(
-            &self.paths,
-            cwd,
-            session.permission_mode.as_deref(),
-        )) {
-            return Err(reason.into());
+        if let Some(live) = live {
+            if let Some(reason) = inbox::blocked_reason(inbox::inbound(
+                &self.paths,
+                cwd,
+                session.permission_mode.as_deref(),
+            )) {
+                return Err(reason.into());
+            }
+            let text = msg.peer_text(id)?;
+            // A stale socket did not receive any bytes. Leave this request retryable
+            // until connected, then claim it before writing to prevent duplicates.
+            let stream = inbox::connect(&live)?;
+            let changed = db
+                .execute(
+                    "UPDATE deliveries SET sent=1 WHERE session=? AND sent=0",
+                    [sid],
+                )
+                .map_err(|_| "无法确认发送状态")?;
+            if changed != 1 {
+                return Err("同一条消息正在发送".into());
+            }
+            inbox::send_connected(stream, &self.paths, &live, id, &text)?;
+            for _ in 0..24 {
+                if inbox::recorded(&transcript, id) {
+                    let ok = receipt(true);
+                    self.turns.remember(id, &ok);
+                    return Ok(ok);
+                }
+                std::thread::sleep(Duration::from_millis(120))
+            }
+            return Err("Claude 桌面已打开，尚未确认首条消息送达，请查看会话".into());
         }
-        let text = msg.peer_text(id)?;
-        // A stale socket did not receive any bytes. Leave this request retryable
-        // until connected, then claim it before writing to prevent duplicates.
-        let stream = inbox::connect(&live)?;
+        let launch = self.launch(
+            gateway,
+            cwd,
+            ["--resume", &session.cli_id],
+            model,
+            session.permission_mode.as_deref(),
+            session.cli_version.as_deref(),
+        )?;
         let changed = db
             .execute(
                 "UPDATE deliveries SET sent=1 WHERE session=? AND sent=0",
@@ -198,15 +267,18 @@ impl Claude {
         if changed != 1 {
             return Err("同一条消息正在发送".into());
         }
-        inbox::send_connected(stream, &self.paths, &live, id, &text)?;
-        for _ in 0..24 {
-            if inbox::recorded(&transcript, id) {
-                let ok = receipt(true);
-                self.turns.remember(id, &ok);
-                return Ok(ok);
-            }
-            std::thread::sleep(Duration::from_millis(120))
+        let started = self.turns.start(
+            &self.events,
+            &session.cli_id,
+            &thread,
+            id,
+            &msg.content(),
+            launch,
+            None,
+        );
+        if started.is_err() {
+            let _ = db.execute("UPDATE deliveries SET sent=0 WHERE session=?", [sid]);
         }
-        Err("Claude 桌面已打开，尚未确认首条消息送达，请查看会话".into())
+        started
     }
 }
